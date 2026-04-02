@@ -1,0 +1,33 @@
+name: travel-agent-memory
+metadata:
+  template: travel-agent-memory
+  description: Corporate travel assistant with agentic memory
+
+services:
+  api:
+    project: ./notebooks/08_production
+    host: containerapp
+    language: python
+
+infra:
+  provider: bicep
+  path: ./notebooks/08_production/deploy
+
+hooks:
+  postprovision:
+    shell: pwsh
+    run: |
+      Write-Host "Post-provisioning: Creating Cosmos DB containers..."
+      az cosmosdb sql container create `
+        --account-name $env:COSMOS_ACCOUNT `
+        --database-name "travel-memory" `
+        --name "memories" `
+        --partition-key-path "/employee_id" `
+        --resource-group $env:RESOURCE_GROUP
+      
+      az cosmosdb sql container create `
+        --account-name $env:COSMOS_ACCOUNT `
+        --database-name "travel-memory" `
+        --name "travel-requests" `
+        --partition-key-path "/employee_id" `
+        --resource-group $env:RESOURCE_GROUP

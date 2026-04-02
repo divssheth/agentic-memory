@@ -1,0 +1,117 @@
+[
+  {
+    "trip_id": "T001",
+    "employee_id": "E001",
+    "destination": "New York",
+    "destination_code": "JFK",
+    "purpose": "Q4 Engineering Summit",
+    "departure_date": "2025-10-15",
+    "return_date": "2025-10-18",
+    "flight": {
+      "outbound": "UA101",
+      "return": "UA103",
+      "total_cost": 920
+    },
+    "hotel": {
+      "hotel_id": "H001",
+      "nights": 3,
+      "total_cost": 840
+    },
+    "total_cost": 1760,
+    "status": "completed",
+    "rating": 5,
+    "notes": "Great hotel location, close to venue"
+  },
+  {
+    "trip_id": "T002",
+    "employee_id": "E001",
+    "destination": "London",
+    "destination_code": "LHR",
+    "purpose": "Client meeting with Acme Corp",
+    "departure_date": "2025-11-20",
+    "return_date": "2025-11-25",
+    "flight": {
+      "outbound": "UA201",
+      "return": "UA202",
+      "total_cost": 2450
+    },
+    "hotel": {
+      "hotel_id": "H006",
+      "nights": 5,
+      "total_cost": 1450
+    },
+    "total_cost": 3900,
+    "status": "completed",
+    "rating": 4,
+    "notes": "Long flight but productive meetings"
+  },
+  {
+    "trip_id": "T003",
+    "employee_id": "E002",
+    "destination": "New York",
+    "destination_code": "JFK",
+    "purpose": "Board presentation",
+    "departure_date": "2025-12-01",
+    "return_date": "2025-12-02",
+    "flight": {
+      "outbound": "DL305",
+      "return": "UA103",
+      "total_cost": 900
+    },
+    "hotel": {
+      "hotel_id": "H002",
+      "nights": 1,
+      "total_cost": 320
+    },
+    "total_cost": 1220,
+    "status": "completed",
+    "rating": 5,
+    "notes": "Quick trip, efficient"
+  },
+  {
+    "trip_id": "T004",
+    "employee_id": "E003",
+    "destination": "Tokyo",
+    "destination_code": "NRT",
+    "purpose": "Partner conference",
+    "departure_date": "2026-01-10",
+    "return_date": "2026-01-15",
+    "flight": {
+      "outbound": "UA150",
+      "return": "UA151",
+      "total_cost": 2800
+    },
+    "hotel": {
+      "hotel_id": "H009",
+      "nights": 5,
+      "total_cost": 1600
+    },
+    "total_cost": 4400,
+    "status": "completed",
+    "rating": 5,
+    "notes": "Amazing conference, hotel was perfect"
+  },
+  {
+    "trip_id": "T005",
+    "employee_id": "E001",
+    "destination": "New York",
+    "destination_code": "JFK",
+    "purpose": "Team offsite",
+    "departure_date": "2026-02-20",
+    "return_date": "2026-02-22",
+    "flight": {
+      "outbound": "UA102",
+      "return": "UA103",
+      "total_cost": 860
+    },
+    "hotel": {
+      "hotel_id": "H001",
+      "nights": 2,
+      "total_cost": 560
+    },
+    "total_cost": 1420,
+    "status": "completed",
+    "rating": 4,
+    "notes": "Same hotel as before, still good"
+  }
+]

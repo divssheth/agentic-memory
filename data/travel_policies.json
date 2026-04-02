@@ -1,0 +1,50 @@
+{
+  "general": {
+    "advance_booking_days": 7,
+    "max_trip_duration_days": 14,
+    "requires_business_justification": true,
+    "preferred_vendors_required": false
+  },
+  "by_level": {
+    "Junior": {
+      "max_flight_cost": 500,
+      "max_hotel_per_night": 200,
+      "allowed_flight_class": ["economy"],
+      "requires_manager_approval": true,
+      "auto_approve_under": 300
+    },
+    "Senior": {
+      "max_flight_cost": 800,
+      "max_hotel_per_night": 300,
+      "allowed_flight_class": ["economy", "economy_plus"],
+      "requires_manager_approval": true,
+      "auto_approve_under": 500
+    },
+    "Director": {
+      "max_flight_cost": 1500,
+      "max_hotel_per_night": 400,
+      "allowed_flight_class": ["economy", "economy_plus", "business"],
+      "requires_manager_approval": true,
+      "auto_approve_under": 1000
+    },
+    "VP": {
+      "max_flight_cost": 3000,
+      "max_hotel_per_night": 500,
+      "allowed_flight_class": ["economy", "economy_plus", "business"],
+      "requires_manager_approval": true,
+      "auto_approve_under": 2000
+    },
+    "C-Suite": {
+      "max_flight_cost": 10000,
+      "max_hotel_per_night": 1000,
+      "allowed_flight_class": ["economy", "economy_plus", "business", "first"],
+      "requires_manager_approval": false,
+      "auto_approve_under": 10000
+    }
+  },
+  "international": {
+    "requires_visa_check": true,
+    "requires_travel_insurance": true,
+    "advance_booking_days": 14
+  }
+}

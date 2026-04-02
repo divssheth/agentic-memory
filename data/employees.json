@@ -1,0 +1,77 @@
+[
+  {
+    "employee_id": "E001",
+    "name": "Sarah Chen",
+    "email": "sarah.chen@contoso.com",
+    "department": "Engineering",
+    "level": "Senior",
+    "manager_id": "E002",
+    "preferences": {
+      "airline": "United",
+      "seat": "aisle",
+      "hotel_chain": "Marriott",
+      "dietary": "vegetarian",
+      "loyalty_programs": ["United MileagePlus", "Marriott Bonvoy"]
+    }
+  },
+  {
+    "employee_id": "E002",
+    "name": "Michael Torres",
+    "email": "michael.torres@contoso.com",
+    "department": "Engineering",
+    "level": "Director",
+    "manager_id": "E005",
+    "preferences": {
+      "airline": "Delta",
+      "seat": "window",
+      "hotel_chain": "Hilton",
+      "dietary": null,
+      "loyalty_programs": ["Delta SkyMiles", "Hilton Honors"]
+    }
+  },
+  {
+    "employee_id": "E003",
+    "name": "Emily Rodriguez",
+    "email": "emily.rodriguez@contoso.com",
+    "department": "Sales",
+    "level": "Senior",
+    "manager_id": "E004",
+    "preferences": {
+      "airline": "American",
+      "seat": "aisle",
+      "hotel_chain": "Marriott",
+      "dietary": "gluten-free",
+      "loyalty_programs": ["AAdvantage", "Marriott Bonvoy"]
+    }
+  },
+  {
+    "employee_id": "E004",
+    "name": "James Kim",
+    "email": "james.kim@contoso.com",
+    "department": "Sales",
+    "level": "VP",
+    "manager_id": "E005",
+    "preferences": {
+      "airline": "United",
+      "seat": "window",
+      "hotel_chain": "Hyatt",
+      "dietary": null,
+      "loyalty_programs": ["United MileagePlus", "World of Hyatt"]
+    }
+  },
+  {
+    "employee_id": "E005",
+    "name": "Patricia Johnson",
+    "email": "patricia.johnson@contoso.com",
+    "department": "Executive",
+    "level": "C-Suite",
+    "manager_id": null,
+    "preferences": {
+      "airline": "United",
+      "seat": "window",
+      "hotel_chain": "Four Seasons",
+      "dietary": null,
+      "loyalty_programs": ["United MileagePlus"]
+    }
+  }
+]

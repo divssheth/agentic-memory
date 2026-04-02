@@ -1,0 +1,145 @@
+[
+  {
+    "flight_id": "UA101",
+    "airline": "United",
+    "origin": "SFO",
+    "destination": "JFK",
+    "departure": "2026-04-15T08:00:00",
+    "arrival": "2026-04-15T16:30:00",
+    "price": 450,
+    "class": "economy",
+    "stops": 0
+  },
+  {
+    "flight_id": "UA102",
+    "airline": "United",
+    "origin": "SFO",
+    "destination": "JFK",
+    "departure": "2026-04-15T14:00:00",
+    "arrival": "2026-04-15T22:30:00",
+    "price": 380,
+    "class": "economy",
+    "stops": 1
+  },
+  {
+    "flight_id": "UA201",
+    "airline": "United",
+    "origin": "SFO",
+    "destination": "LHR",
+    "departure": "2026-04-20T18:00:00",
+    "arrival": "2026-04-21T12:00:00",
+    "price": 1200,
+    "class": "economy",
+    "stops": 0
+  },
+  {
+    "flight_id": "DL305",
+    "airline": "Delta",
+    "origin": "SFO",
+    "destination": "JFK",
+    "departure": "2026-04-15T09:00:00",
+    "arrival": "2026-04-15T17:45:00",
+    "price": 420,
+    "class": "economy",
+    "stops": 0
+  },
+  {
+    "flight_id": "DL401",
+    "airline": "Delta",
+    "origin": "SFO",
+    "destination": "LHR",
+    "departure": "2026-04-20T16:30:00",
+    "arrival": "2026-04-21T10:45:00",
+    "price": 1350,
+    "class": "economy",
+    "stops": 1
+  },
+  {
+    "flight_id": "AA501",
+    "airline": "American",
+    "origin": "SFO",
+    "destination": "JFK",
+    "departure": "2026-04-15T07:30:00",
+    "arrival": "2026-04-15T16:00:00",
+    "price": 410,
+    "class": "economy",
+    "stops": 0
+  },
+  {
+    "flight_id": "BA601",
+    "airline": "British Airways",
+    "origin": "SFO",
+    "destination": "LHR",
+    "departure": "2026-04-20T19:00:00",
+    "arrival": "2026-04-21T13:15:00",
+    "price": 1150,
+    "class": "economy",
+    "stops": 0
+  },
+  {
+    "flight_id": "UA103",
+    "airline": "United",
+    "origin": "JFK",
+    "destination": "SFO",
+    "departure": "2026-04-18T10:00:00",
+    "arrival": "2026-04-18T13:30:00",
+    "price": 480,
+    "class": "economy",
+    "stops": 0
+  },
+  {
+    "flight_id": "UA202",
+    "airline": "United",
+    "origin": "LHR",
+    "destination": "SFO",
+    "departure": "2026-04-25T11:00:00",
+    "arrival": "2026-04-25T14:00:00",
+    "price": 1250,
+    "class": "economy",
+    "stops": 0
+  },
+  {
+    "flight_id": "UA150",
+    "airline": "United",
+    "origin": "SFO",
+    "destination": "NRT",
+    "departure": "2026-05-01T13:00:00",
+    "arrival": "2026-05-02T17:00:00",
+    "price": 1400,
+    "class": "economy",
+    "stops": 0
+  },
+  {
+    "flight_id": "DL550",
+    "airline": "Delta",
+    "origin": "SEA",
+    "destination": "LHR",
+    "departure": "2026-05-10T17:30:00",
+    "arrival": "2026-05-11T11:45:00",
+    "price": 1100,
+    "class": "economy",
+    "stops": 1
+  },
+  {
+    "flight_id": "BA701",
+    "airline": "British Airways",
+    "origin": "SEA",
+    "destination": "LHR",
+    "departure": "2026-05-10T19:00:00",
+    "arrival": "2026-05-11T13:15:00",
+    "price": 1250,
+    "class": "economy",
+    "stops": 0
+  },
+  {
+    "flight_id": "UA301",
+    "airline": "United",
+    "origin": "SEA",
+    "destination": "LHR",
+    "departure": "2026-05-10T16:00:00",
+    "arrival": "2026-05-11T10:30:00",
+    "price": 1050,
+    "class": "economy",
+    "stops": 1
+  }
+]

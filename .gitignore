@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated files (notebooks built from build_notebook.py)
+# Uncomment if you only want to track build scripts:
+# notebooks/**/*.ipynb
+
+# Module runtime artifacts
+notebooks/**/prompts/
+notebooks/**/procedures/
+
+# One-time migration scripts
+_migrate_*.py
+_rewrite_*.py
+*.bak

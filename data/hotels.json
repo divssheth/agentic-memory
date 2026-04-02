@@ -1,0 +1,92 @@
+[
+  {
+    "hotel_id": "H001",
+    "name": "Marriott Times Square",
+    "chain": "Marriott",
+    "city": "New York",
+    "city_code": "JFK",
+    "price_per_night": 280,
+    "star_rating": 4,
+    "is_preferred_vendor": true
+  },
+  {
+    "hotel_id": "H002",
+    "name": "Hilton Midtown",
+    "chain": "Hilton",
+    "city": "New York",
+    "city_code": "JFK",
+    "price_per_night": 320,
+    "star_rating": 4,
+    "is_preferred_vendor": true
+  },
+  {
+    "hotel_id": "H003",
+    "name": "Hyatt Grand Central",
+    "chain": "Hyatt",
+    "city": "New York",
+    "city_code": "JFK",
+    "price_per_night": 350,
+    "star_rating": 5,
+    "is_preferred_vendor": true
+  },
+  {
+    "hotel_id": "H004",
+    "name": "Budget Inn Manhattan",
+    "chain": "Independent",
+    "city": "New York",
+    "city_code": "JFK",
+    "price_per_night": 150,
+    "star_rating": 2,
+    "is_preferred_vendor": false
+  },
+  {
+    "hotel_id": "H005",
+    "name": "The Londoner",
+    "chain": "Independent",
+    "city": "London",
+    "city_code": "LHR",
+    "price_per_night": 380,
+    "star_rating": 5,
+    "is_preferred_vendor": false
+  },
+  {
+    "hotel_id": "H006",
+    "name": "Marriott County Hall",
+    "chain": "Marriott",
+    "city": "London",
+    "city_code": "LHR",
+    "price_per_night": 290,
+    "star_rating": 4,
+    "is_preferred_vendor": true
+  },
+  {
+    "hotel_id": "H007",
+    "name": "Hilton Tower Bridge",
+    "chain": "Hilton",
+    "city": "London",
+    "city_code": "LHR",
+    "price_per_night": 310,
+    "star_rating": 4,
+    "is_preferred_vendor": true
+  },
+  {
+    "hotel_id": "H008",
+    "name": "Park Hyatt Tokyo",
+    "chain": "Hyatt",
+    "city": "Tokyo",
+    "city_code": "NRT",
+    "price_per_night": 450,
+    "star_rating": 5,
+    "is_preferred_vendor": true
+  },
+  {
+    "hotel_id": "H009",
+    "name": "Marriott Tokyo",
+    "chain": "Marriott",
+    "city": "Tokyo",
+    "city_code": "NRT",
+    "price_per_night": 320,
+    "star_rating": 4,
+    "is_preferred_vendor": true
+  }
+]

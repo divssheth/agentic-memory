@@ -1,0 +1,29 @@
+# Core
+python-dotenv>=1.0.0
+jupyter>=1.0.0
+ipykernel>=6.0.0
+nest-asyncio>=1.5.0
+
+# Microsoft Agent Framework (pinned versions)
+agent-framework-foundry==1.0.0rc6
+agent-framework-core==1.0.0rc6
+agent-framework-orchestrations==1.0.0b260330
+
+# Azure Authentication
+azure-identity>=1.15.0
+
+# Storage (progressive - uncomment as needed per module)
+# Module 2+: Episodic Memory - Cosmos DB
+# azure-cosmos>=4.5.0
+
+# Module 3+: Semantic Memory - Neo4j
+# neo4j>=5.0.0
+
+# Module 4+: Procedural Memory - Azure AI Search
+# azure-search-documents>=11.5.0
+
+# Module 7+: Shared State - Redis
+# redis>=5.0.0
+
+# Utilities
+pydantic>=2.5.0
