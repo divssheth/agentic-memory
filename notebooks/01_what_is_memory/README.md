@@ -13,7 +13,7 @@ By the end of this module, you will:
 ## Prerequisites
 
 - Python 3.11+
-- Azure AI Foundry Project with gpt-5 deployment
+- Azure AI Foundry Project with model deployment (configured via `FOUNDRY_MODEL`)
 - `az login` or managed identity configured
 
 ## Time
@@ -65,7 +65,6 @@ A simple travel assistant that:
 - ❌ First: Forgets everything (demonstrates the problem)
 - ✅ Then: Remembers the conversation (demonstrates the solution)
 
-## Next Steps
+## Navigation
 
-After completing this module:
-- → [Module 2: Memory Types Explained](../02_memory_types/) - Episodic, Semantic, Procedural
+- → Next: [Module 2: Episodic Memory](../02_episodic_memory/)

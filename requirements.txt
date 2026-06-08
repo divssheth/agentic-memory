@@ -5,9 +5,10 @@ ipykernel>=6.0.0
 nest-asyncio>=1.5.0
 
 # Microsoft Agent Framework (pinned versions)
-agent-framework-foundry==1.0.0rc6
-agent-framework-core==1.0.0rc6
-agent-framework-orchestrations==1.0.0b260330
+agent-framework-foundry==1.0.0
+agent-framework-core==1.0.0
+agent-framework-orchestrations==1.0.0b260402
+agent-framework-azure-cosmos==1.0.0b260402
 
 # Azure Authentication
 azure-identity>=1.15.0

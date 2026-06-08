@@ -1,3 +1,0 @@
-"""
-Travel Agent API package.
-"""

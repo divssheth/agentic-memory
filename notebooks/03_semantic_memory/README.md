@@ -13,7 +13,7 @@ By the end of this module, you will:
 ## Prerequisites
 
 - Completed Module 2 (Episodic Memory)
-- Azure AI Foundry Project with gpt-5 deployment
+- Azure AI Foundry Project with model deployment (configured via `FOUNDRY_MODEL`)
 - (Optional) Neo4j database for persistence
 
 ## Time
@@ -24,7 +24,7 @@ By the end of this module, you will:
 
 | File | Purpose |
 |------|---------|
-| `semantic_memory.py` | Neo4j implementation + tools |
+
 | `03_semantic_memory.ipynb` | Hands-on notebook with concepts |
 | `steps/01_setup_neo4j.md` | Neo4j setup guide |
 
@@ -106,3 +106,8 @@ Agent: [extracts & stores]
 User: "What airlines do I like?"
 Agent: [queries graph] "You prefer Delta."
 ```
+
+## Navigation
+
+- ← Previous: [Module 2: Episodic Memory](../02_episodic_memory/)
+- → Next: [Module 4: Procedural Memory](../04_procedural_memory/)

@@ -1,37 +1,39 @@
 # Agentic Memory Tutorial Series
 
-A progressive tutorial teaching memory patterns in AI agents—from transient to persistent to multi-agent shared memory—using a **Corporate Travel Assistant** as the consistent scenario.
+A progressive tutorial teaching memory patterns in AI agents — from transient to persistent to multi-agent shared memory — using a **Corporate Travel Assistant** as the consistent scenario.
 
 ## Learning Journey
 
-| Module | Concept | Duration |
-|--------|---------|----------|
-| **1. What is Agent Memory?** | Stateless vs stateful agents | 30 min |
-| **2. Memory Types Explained** | Episodic, Semantic, Procedural | 30 min |
-| **3. Persisting Memory** | Memory that survives restarts | 30 min |
-| **4. Vector Memory & Semantic Search** | Embedding-based retrieval | 30 min |
-| **5. Single Agent, Full Memory Stack** | All memory types combined | 30 min |
-| **6. Memory Handoff Between Agents** | Passing context between agents | 30 min |
-| **7. Shared Memory Store** | Multiple agents, one memory | 30 min |
-| **8. Production Deployment** | Deployable multi-agent system | 45 min |
+| Module | Concept | What You'll Build |
+|--------|---------|-------------------|
+| **1. Agent Basics + Session Memory** | Stateless vs stateful agents | A travel assistant that forgets vs remembers within a session |
+| **2. Episodic Memory** | Persisting events to Cosmos DB | Selective memory — the agent decides what's worth remembering |
+| **3. Semantic Memory** | Facts & preferences in Neo4j | A knowledge graph of user preferences and relationships |
+| **4. Procedural Memory** | Skills, procedures, budget rules | Domain-specific behaviors loaded from SKILL.md files |
+| **5. Combined Memory** | All memory types + conflict resolution | Priority hierarchies when memories disagree |
+| **6. Memory Handoff** | Passing context between agents | Router → specialist agent memory transfer |
+| **7. Shared Memory** | Multi-user isolation | Concurrent users with isolated memory stores (Redis optional) |
 
 ## Scenario: Corporate Travel Assistant
 
 Throughout this series, we build a travel booking system that:
-- **Remembers** your past trips (episodic memory)
-- **Knows** your preferences (semantic memory)
-- **Follows** company policies (procedural memory)
-- **Coordinates** between multiple agents (shared memory)
+- **Remembers** past trips and experiences (episodic memory — Cosmos DB)
+- **Knows** preferences and relationships (semantic memory — Neo4j)
+- **Follows** company policies and procedures (procedural memory — skills)
+- **Resolves** conflicts when memories disagree (combined memory)
+- **Hands off** context between specialized agents (memory handoff)
+- **Shares** memory across users with isolation (shared memory — Redis)
 
 ## Prerequisites
 
 - Python 3.11+
 - Azure subscription with:
-  - Azure AI Foundry Project (new, not classic)
-  - Azure OpenAI deployment (GPT-4o recommended)
-  - Azure AI Search (for Modules 4+)
-  - Cosmos DB (for Modules 5+)
-  - Redis Cache (for Module 7+)
+  - Azure AI Foundry project (endpoint in `.env`)
+  - Model deployment (configured via `FOUNDRY_MODEL` in `.env`)
+- Module-specific backends (set up as you progress):
+  - **Module 2+**: Azure Cosmos DB (episodic memory + chat history)
+  - **Module 3+**: Neo4j (semantic memory)
+  - **Module 7**: Redis (optional — runs in-memory by default)
 
 ## Quick Start
 
@@ -47,39 +49,46 @@ cp .env.example .env
 # Edit .env with your Azure credentials
 
 # Start with Module 1
-jupyter notebook notebooks/01_what_is_memory.ipynb
+jupyter notebook notebooks/01_what_is_memory/01_what_is_memory.ipynb
 ```
 
 ## Project Structure
 
 ```
 agentic-memory/
-├── data/                    # Mock data (employees, flights, hotels, policies)
-├── notebooks/               # All tutorial modules
-│   ├── 01_what_is_memory/
-│   ├── 02_memory_types/
-│   ├── 03_persistent_memory/
-│   ├── 04_vector_memory/
-│   ├── 05_single_agent/
-│   ├── 06_memory_handoff/
-│   ├── 07_shared_memory/
-│   └── 08_production/
-├── src/                     # Reusable code
-│   ├── memory/              # Memory implementations
-│   ├── agents/              # Agent implementations
-│   └── tools/               # Agent tools
-└── azure.yaml               # Azure Developer CLI config
+├── data/                          # Shared data (employees, flights, hotels, policies)
+├── notebooks/
+│   ├── 01_what_is_memory/         # Session memory basics
+│   ├── 02_episodic_memory/        # Events → Cosmos DB
+│   ├── 03_semantic_memory/        # Facts → Neo4j
+│   ├── 04_procedural_memory/      # Skills + budget rules
+│   ├── 05_combined_memory/        # Conflict resolution
+│   ├── 06_memory_handoff/         # Agent-to-agent context transfer
+│   └── 07_shared_memory/          # Multi-user isolation (Redis)
+├── src/                           # Reusable modules
+├── requirements.txt               # Python dependencies
+└── azure.yaml                     # Azure Developer CLI config
 ```
 
-## Azure Infrastructure
+Each module folder contains:
+- `XX_module_name.ipynb` — the tutorial notebook
+- `README.md` — module-specific setup instructions
+- `steps/` — backend setup guides (where applicable)
+- `prompts/` or `skills/` — procedural memory assets (where applicable)
 
-| Resource | Purpose | Created In |
-|----------|---------|------------|
-| Azure AI Foundry Project | Agent hosting, model access | Pre-requisite |
-| Azure OpenAI | LLM for agents | Pre-requisite |
-| Azure AI Search | Vector memory, semantic retrieval | Module 4 |
-| Cosmos DB | Persistent episodic/semantic memory | Module 5 |
-| Redis Cache | Shared session state | Module 7 |
+## Environment Variables
+
+```env
+FOUNDRY_PROJECT_ENDPOINT=https://...
+FOUNDRY_MODEL=gpt-4o
+AZURE_TENANT_ID=your-tenant-id
+COSMOS_ENDPOINT=https://...documents.azure.com:443/
+NEO4J_URI=neo4j+s://...
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=...
+NEO4J_DATABASE=neo4j
+REDIS_URL=redis://...          # Module 7 only
+```
 
 ## License
 

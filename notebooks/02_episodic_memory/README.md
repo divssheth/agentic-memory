@@ -12,7 +12,7 @@ By the end of this module, you will:
 ## Prerequisites
 
 - Completed Module 1 (Agent Basics)
-- Azure AI Foundry Project with gpt-5 deployment
+- Azure AI Foundry Project with model deployment (configured via `FOUNDRY_MODEL`)
 - (Optional) Azure Cosmos DB account for persistence
 
 ## Time
@@ -23,7 +23,7 @@ By the end of this module, you will:
 
 | File | Purpose |
 |------|---------|
-| `episodic_memory.py` | Cosmos DB implementation + tools |
+
 | `02_episodic_memory.ipynb` | Hands-on notebook with concepts |
 | `steps/01_setup_cosmos.md` | Cosmos DB setup guide |
 
@@ -97,3 +97,8 @@ Agent: [calls remember_event] "I've noted your positive experience!"
 User: "What hotel should I book in NYC?"
 Agent: [calls recall_events] "Based on your great stay at the Marriott..."
 ```
+
+## Navigation
+
+- ← Previous: [Module 1: Agent Basics + Session Memory](../01_what_is_memory/)
+- → Next: [Module 3: Semantic Memory](../03_semantic_memory/)

@@ -3,16 +3,6 @@ metadata:
   template: travel-agent-memory
   description: Corporate travel assistant with agentic memory
 
-services:
-  api:
-    project: ./notebooks/08_production
-    host: containerapp
-    language: python
-
-infra:
-  provider: bicep
-  path: ./notebooks/08_production/deploy
-
 hooks:
   postprovision:
     shell: pwsh
