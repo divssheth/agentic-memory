@@ -1,0 +1,51 @@
+{
+  "by_level": {
+    "Junior": {
+      "max_flight_cost": 500,
+      "max_hotel_per_night": 200,
+      "allowed_flight_class": [
+        "economy"
+      ]
+    },
+    "Senior": {
+      "max_flight_cost": 800,
+      "max_hotel_per_night": 300,
+      "allowed_flight_class": [
+        "economy",
+        "economy_plus"
+      ]
+    },
+    "Director": {
+      "max_flight_cost": 1500,
+      "max_hotel_per_night": 400,
+      "allowed_flight_class": [
+        "economy",
+        "economy_plus",
+        "business"
+      ]
+    },
+    "VP": {
+      "max_flight_cost": 3000,
+      "max_hotel_per_night": 500,
+      "allowed_flight_class": [
+        "economy",
+        "economy_plus",
+        "business"
+      ]
+    },
+    "C-Suite": {
+      "max_flight_cost": 10000,
+      "max_hotel_per_night": 1000,
+      "allowed_flight_class": [
+        "economy",
+        "economy_plus",
+        "business",
+        "first"
+      ]
+    }
+  },
+  "general": {
+    "max_trip_duration_days": 14,
+    "requires_business_justification": true
+  }
+}
