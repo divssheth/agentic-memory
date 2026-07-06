@@ -1,0 +1,68 @@
+{
+  "version": "2026-Q3",
+  "last_updated": "2026-07-01",
+  "effective_date": "2026-07-01",
+  "description": "Daily per-diem allowances by city. Covers meals, incidentals, and minor expenses. Does NOT include lodging.",
+  "tiers": {
+    "tier_1_high_cost": {
+      "daily_rate": 85,
+      "currency": "USD",
+      "cities": [
+        {"city": "New York", "country": "US", "code": "NYC"},
+        {"city": "San Francisco", "country": "US", "code": "SFO"},
+        {"city": "Los Angeles", "country": "US", "code": "LAX"},
+        {"city": "Washington DC", "country": "US", "code": "DCA"},
+        {"city": "Boston", "country": "US", "code": "BOS"},
+        {"city": "London", "country": "UK", "code": "LHR"},
+        {"city": "Tokyo", "country": "Japan", "code": "NRT"},
+        {"city": "Zurich", "country": "Switzerland", "code": "ZRH"},
+        {"city": "Geneva", "country": "Switzerland", "code": "GVA"},
+        {"city": "Paris", "country": "France", "code": "CDG"},
+        {"city": "Sydney", "country": "Australia", "code": "SYD"}
+      ]
+    },
+    "tier_2_moderate": {
+      "daily_rate": 65,
+      "currency": "USD",
+      "cities": [
+        {"city": "Chicago", "country": "US", "code": "ORD"},
+        {"city": "Seattle", "country": "US", "code": "SEA"},
+        {"city": "Miami", "country": "US", "code": "MIA"},
+        {"city": "Atlanta", "country": "US", "code": "ATL"},
+        {"city": "Berlin", "country": "Germany", "code": "BER"},
+        {"city": "Munich", "country": "Germany", "code": "MUC"},
+        {"city": "Toronto", "country": "Canada", "code": "YYZ"},
+        {"city": "Vancouver", "country": "Canada", "code": "YVR"},
+        {"city": "Singapore", "country": "Singapore", "code": "SIN"},
+        {"city": "Dubai", "country": "UAE", "code": "DXB"},
+        {"city": "Amsterdam", "country": "Netherlands", "code": "AMS"}
+      ]
+    },
+    "tier_3_standard": {
+      "daily_rate": 50,
+      "currency": "USD",
+      "cities": [
+        {"city": "Austin", "country": "US", "code": "AUS"},
+        {"city": "Denver", "country": "US", "code": "DEN"},
+        {"city": "Portland", "country": "US", "code": "PDX"},
+        {"city": "Dallas", "country": "US", "code": "DFW"},
+        {"city": "Dublin", "country": "Ireland", "code": "DUB"},
+        {"city": "Prague", "country": "Czech Republic", "code": "PRG"},
+        {"city": "Bangalore", "country": "India", "code": "BLR"},
+        {"city": "Mumbai", "country": "India", "code": "BOM"},
+        {"city": "São Paulo", "country": "Brazil", "code": "GRU"}
+      ]
+    }
+  },
+  "default_international_rate": 70,
+  "default_domestic_rate": 55,
+  "rules": {
+    "partial_day_arrival": "75% of daily rate",
+    "partial_day_departure": "75% of daily rate",
+    "company_provided_meal_deduction": 20,
+    "conference_with_meals_included": "50% of daily rate",
+    "weekend_during_trip": "Full rate if extending trip would cost more than weekend per-diem",
+    "no_receipts_required": true,
+    "taxable_above": null
+  }
+}
