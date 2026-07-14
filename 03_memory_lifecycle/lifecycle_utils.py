@@ -207,6 +207,167 @@ class PromotionEngine:
 
 
 # ---------------------------------------------------------------------------
+# Graph-Backed Staged Promotion (Neo4j)
+# ---------------------------------------------------------------------------
+
+class GraphPromotionStore:
+    """Staged-promotion trust state stored ON Neo4j preference nodes.
+
+    Every transition is a Cypher statement executed inside the database, so the
+    same operations run unchanged from a notebook, a request handler, or a
+    scheduled maintenance job. Preferences carry a ``state`` property
+    (candidate -> provisional -> trusted -> deprecated); the agent's recall path
+    filters on it, so an untrusted write can never reach the model.
+
+    Scope: every method only touches preferences that have a ``state`` property,
+    i.e. the ones this lifecycle manages. Preferences written by other modules
+    (which lack ``state``) are left untouched.
+    """
+
+    def __init__(self, memory, config: "PromotionConfig" = None):
+        self._m = memory
+        self.config = config or PromotionConfig()
+
+    async def reset(self) -> None:
+        """Delete lifecycle-managed preferences so demo re-runs start clean."""
+        await self._m._client.execute_write(
+            "MATCH (p:Preference) WHERE p.state IS NOT NULL DETACH DELETE p"
+        )
+
+    async def record(self, category, preference, source_type, confidence=0.7) -> str:
+        """OP1 - persist a preference with its initial trust state.
+        user_assertion enters 'provisional' (anti-spoofing); else 'candidate'."""
+        pref = await self._m.long_term.add_preference(
+            category=category, preference=preference, confidence=confidence
+        )
+        state = "provisional" if source_type == "user_assertion" else "candidate"
+        await self._m._client.execute_write(
+            """MATCH (p:Preference {id:$id})
+               SET p.state=$state, p.source_type=$src, p.confirmation_count=0,
+                   p.first_seen=datetime(),
+                   p.last_confirmed=CASE WHEN $state='provisional'
+                                         THEN datetime() ELSE null END""",
+            {"id": str(pref.id), "state": state, "src": source_type},
+        )
+        return state
+
+    async def record_trusted(self, category, preference, confidence=0.9) -> None:
+        """Trust-on-first-write (the anti-pattern) - write straight to trusted."""
+        await self.record(category, preference, "tool_output", confidence)
+        await self._m._client.execute_write(
+            "MATCH (p:Preference {preference:$t}) "
+            "SET p.state='trusted', p.last_confirmed=datetime()",
+            {"t": preference},
+        )
+
+    async def confirm(self, preference) -> dict:
+        """OP2 - one confirmation + promotion, atomically (race-free).
+        Matches the closest stored preference by semantic search, so the agent
+        can reaffirm in its own words. Ignores preferences stored <5s ago
+        (prevents same-turn remember+confirm from skipping provisional)."""
+        hits = await self._m.long_term.search_preferences(
+            query=preference, threshold=0.0, limit=1
+        )
+        if not hits:
+            return {"state": None, "confirmations": 0}
+        rows = await self._m._client.execute_write(
+            """MATCH (p:Preference {id:$id})
+               WHERE p.first_seen < datetime() - duration({seconds:5})
+               SET p.confirmation_count=coalesce(p.confirmation_count,0)+1,
+                   p.last_confirmed=datetime()
+               WITH p
+               SET p.state=CASE
+                 WHEN p.source_type='user_assertion' AND p.confirmation_count>=1
+                     THEN 'trusted'
+                 WHEN p.confirmation_count>=$tt THEN 'trusted'
+                 WHEN p.confirmation_count>=$pt THEN 'provisional'
+                 ELSE p.state END
+               RETURN p.state AS state, p.confirmation_count AS confirmations""",
+            {"id": str(hits[0].id),
+             "tt": self.config.confirmation_threshold,
+             "pt": self.config.provisional_threshold},
+        )
+        if not rows:
+            # Preference was too recently stored — return current state without promoting
+            snap = await self._m.query.cypher(
+                "MATCH (p:Preference {id:$id}) RETURN p.state AS state, "
+                "p.confirmation_count AS confirmations",
+                params={"id": str(hits[0].id)},
+            )
+            return snap[0] if snap else {"state": "candidate", "confirmations": 0}
+        return rows[0]
+
+    async def snapshot(self) -> list:
+        """Read all lifecycle-managed preferences and their live states from Neo4j."""
+        return await self._m.query.cypher(
+            "MATCH (p:Preference) WHERE p.state IS NOT NULL "
+            "RETURN p.preference AS preference, p.state AS state, "
+            "p.confirmation_count AS confirmations, p.source_type AS source_type "
+            "ORDER BY p.first_seen"
+        )
+
+    async def staleness_sweep(self) -> int:
+        """OP4 - demote trusted memories unconfirmed past the window.
+        Stateless and idempotent: this is the body of a scheduled job."""
+        rows = await self._m._client.execute_write(
+            """MATCH (p:Preference)
+               WHERE p.state='trusted'
+                 AND p.last_confirmed < datetime() - duration({days:$d})
+               SET p.state='provisional' RETURN count(p) AS demoted""",
+            {"d": self.config.staleness_days},
+        )
+        return rows[0]["demoted"]
+
+    async def deprecation_sweep(self) -> int:
+        """OP5 - retire memories whose confidence fell below the floor."""
+        rows = await self._m._client.execute_write(
+            """MATCH (p:Preference)
+               WHERE p.confidence < $f AND coalesce(p.state,'')<>'deprecated'
+               SET p.state='deprecated' RETURN count(p) AS deprecated""",
+            {"f": self.config.confidence_floor},
+        )
+        return rows[0]["deprecated"]
+
+    async def gated_recall(self, query) -> str:
+        """The agent's read path - semantic recall FILTERED BY TRUST STATE.
+        trusted -> stated as fact; provisional -> hedged; candidate/deprecated withheld."""
+        prefs = await self._m.long_term.search_preferences(query=query, threshold=0.0)
+        if not prefs:
+            return "No preferences found."
+        rows = await self._m.query.cypher(
+            "MATCH (p:Preference) WHERE p.id IN $ids "
+            "RETURN p.preference AS preference, p.state AS state",
+            params={"ids": [str(p.id) for p in prefs]},
+        )
+        out = []
+        for r in rows:
+            if r["state"] == "trusted":
+                out.append(f"[KNOWN FACT] {r['preference']}")
+            elif r["state"] == "provisional":
+                out.append(f"[LIKELY - confirm before assuming] {r['preference']}")
+        return "\n".join(out) if out else "No trusted preferences to share yet."
+
+    async def recall_all(self, query) -> str:
+        """Ungated recall - returns every stored preference as fact (no filtering)."""
+        prefs = await self._m.long_term.search_preferences(query=query, threshold=0.0)
+        if not prefs:
+            return "No preferences found."
+        return "\n".join(f"[FACT] {p.preference}" for p in prefs)
+
+    async def backdate(self, preference, days) -> None:
+        """Test helper: simulate age by moving last_confirmed into the past."""
+        hits = await self._m.long_term.search_preferences(
+            query=preference, threshold=0.0, limit=1
+        )
+        if hits:
+            await self._m._client.execute_write(
+                "MATCH (p:Preference {id:$id}) "
+                "SET p.last_confirmed = datetime() - duration({days:$d})",
+                {"id": str(hits[0].id), "d": days},
+            )
+
+
+# ---------------------------------------------------------------------------
 # Bi-Temporal Belief Revision
 # ---------------------------------------------------------------------------
 
@@ -275,6 +436,129 @@ class BiTemporalRecord:
             state=MemoryState(doc["state"]),
             confidence=doc.get("confidence", 0.8),
             source=doc.get("source", "unknown"),
+        )
+
+
+class GraphBeliefStore:
+    """Bi-temporal belief revision on Neo4j Preference nodes (SCD Type 2).
+
+    Every preference carries ``valid_from`` / ``valid_to`` timestamps.  When a
+    new value supersedes an old one the old node is *retired* (``valid_to`` set,
+    ``superseded_by`` linked) — never deleted.  This gives full audit history
+    plus time-travel queries, all in Cypher.
+
+    Composes with ``GraphPromotionStore``: a revised belief still has a trust
+    ``state`` (candidate / provisional / trusted).
+    """
+
+    def __init__(self, memory):
+        self._m = memory
+
+    async def reset(self) -> None:
+        """Delete belief-managed preferences so demo re-runs start clean."""
+        await self._m._client.execute_write(
+            "MATCH (p:Preference) WHERE p.valid_from IS NOT NULL DETACH DELETE p"
+        )
+
+    async def store(self, category: str, preference: str,
+                    source_type: str = "user_assertion") -> dict:
+        """Store a new belief.  If an existing current belief in the same
+        category contradicts it, supersede the old one (SCD Type 2)."""
+        # Check for existing current belief in this category
+        existing = await self._m.query.cypher(
+            "MATCH (p:Preference) "
+            "WHERE p.category = $cat AND p.valid_to IS NULL "
+            "  AND p.valid_from IS NOT NULL "
+            "RETURN p.id AS id, p.preference AS preference",
+            params={"cat": category},
+        )
+        # Supersede if there's a conflicting current value
+        if existing and existing[0]["preference"].lower() != preference.lower():
+            await self._m._client.execute_write(
+                "MATCH (p:Preference {id:$id}) "
+                "SET p.valid_to = datetime(), p.superseded_by = $new_pref",
+                {"id": existing[0]["id"], "new_pref": preference},
+            )
+
+        # Write new preference with temporal properties
+        pref = await self._m.long_term.add_preference(
+            category=category, preference=preference, confidence=0.8
+        )
+        state = "provisional" if source_type == "user_assertion" else "candidate"
+        await self._m._client.execute_write(
+            """MATCH (p:Preference {id:$id})
+               SET p.valid_from = datetime(), p.valid_to = null,
+                   p.source_type = $src, p.state = $state,
+                   p.category = $cat, p.confirmation_count = 0,
+                   p.first_seen = datetime(), p.last_confirmed = datetime()""",
+            {"id": str(pref.id), "src": source_type, "state": state, "cat": category},
+        )
+        return {"preference": preference, "state": state,
+                "superseded": existing[0]["preference"] if existing else None}
+
+    async def recall_current(self, query: str) -> str:
+        """Recall only currently-valid beliefs (valid_to IS NULL, state trusted/provisional)."""
+        prefs = await self._m.long_term.search_preferences(
+            query=query, threshold=0.0)
+        if not prefs:
+            return "No preferences found."
+        rows = await self._m.query.cypher(
+            "MATCH (p:Preference) WHERE p.id IN $ids "
+            "AND p.valid_to IS NULL AND p.state IN ['trusted','provisional'] "
+            "RETURN p.preference AS preference, p.state AS state, p.category AS category",
+            params={"ids": [str(p.id) for p in prefs]},
+        )
+        if not rows:
+            return "No current beliefs found."
+        out = []
+        for r in rows:
+            tag = "[KNOWN]" if r["state"] == "trusted" else "[LIKELY]"
+            out.append(f"{tag} {r['preference']}")
+        return "\n".join(out)
+
+    async def recall_at_time(self, query: str, iso_date: str) -> str:
+        """Recall beliefs that were valid at a specific date (time-travel query)."""
+        prefs = await self._m.long_term.search_preferences(
+            query=query, threshold=0.0)
+        if not prefs:
+            return "No preferences found."
+        rows = await self._m.query.cypher(
+            "MATCH (p:Preference) WHERE p.id IN $ids "
+            "AND p.valid_from <= datetime($dt) "
+            "AND (p.valid_to IS NULL OR p.valid_to > datetime($dt)) "
+            "RETURN p.preference AS preference, p.category AS cat, "
+            "       toString(p.valid_from) AS vf, toString(p.valid_to) AS vt",
+            params={"ids": [str(p.id) for p in prefs], "dt": iso_date},
+        )
+        if not rows:
+            return f"No beliefs found valid at {iso_date}."
+        return "\n".join(
+            f"{r['preference']} (valid {r['vf'][:10]} → {r['vt'][:10] if r['vt'] else 'present'})"
+            for r in rows
+        )
+
+    async def history(self, category: str) -> list[dict]:
+        """Full evolution of a belief category (SCD Type 2 audit trail)."""
+        return await self._m.query.cypher(
+            "MATCH (p:Preference) WHERE p.category = $cat "
+            "AND p.valid_from IS NOT NULL "
+            "RETURN p.preference AS preference, p.state AS state, "
+            "       toString(p.valid_from) AS valid_from, "
+            "       toString(p.valid_to) AS valid_to, "
+            "       p.superseded_by AS superseded_by "
+            "ORDER BY p.valid_from",
+            params={"cat": category},
+        )
+
+    async def snapshot(self) -> list[dict]:
+        """Read all belief-managed preferences from Neo4j."""
+        return await self._m.query.cypher(
+            "MATCH (p:Preference) WHERE p.valid_from IS NOT NULL "
+            "RETURN p.preference AS preference, p.state AS state, "
+            "       p.category AS category, "
+            "       toString(p.valid_from) AS valid_from, "
+            "       toString(p.valid_to) AS valid_to "
+            "ORDER BY p.valid_from"
         )
 
 
@@ -490,3 +774,209 @@ class ValidationResult:
     action: str                # "keep" | "flag" | "deprecate"
     current_policy_snippet: str = ""  # The relevant policy text found
     policy_version: str = ""   # Current policy version in AI Search
+
+
+# ---------------------------------------------------------------------------
+# Baseline Agent Factory
+# ---------------------------------------------------------------------------
+
+def create_baseline_agent(
+    client,
+    credential,
+    *,
+    cosmos_container=None,
+    search_client=None,
+    openai_client=None,
+    embedding_model: str = "text-embedding-ada-002",
+    extra_tools: list = None,
+    instructions_suffix: str = "",
+    context_providers: list = None,
+    middleware: list = None,
+    name: str = "TravelAssistant",
+):
+    """
+    Create a baseline travel agent with episodic memory (Cosmos) and RAG (AI Search).
+
+    This agent represents the "complete but lifecycle-unmanaged" state:
+    - Can recall past events from Cosmos DB
+    - Can store new events to Cosmos DB
+    - Can search corporate policies via AI Search (hybrid search)
+    - Can search flights/hotels from local data
+    - Has NO lifecycle management (no identification, promotion, revision, etc.)
+
+    Each lifecycle notebook imports this, demonstrates what goes wrong,
+    then layers on the specific lifecycle mechanism.
+
+    Args:
+        client: FoundryChatClient instance
+        credential: AzureCliCredential for Cosmos/Search auth
+        cosmos_container: Async Cosmos container client for episodic events
+        search_client: Azure SearchClient for policy RAG
+        openai_client: OpenAI client for embeddings (account-level)
+        embedding_model: Embedding model deployment name
+        extra_tools: Additional tools to add to the agent
+        instructions_suffix: Extra text appended to system prompt
+        context_providers: Context providers (e.g. SkillsProvider) for the agent
+        middleware: Middleware list (e.g. ToolApprovalMiddleware) for the agent
+        name: Agent name
+
+    Returns:
+        Agent instance with all tools configured
+    """
+    from agent_framework import Agent, tool
+    from shared.travel_agent import (
+        SYSTEM_PROMPT, search_flights, search_hotels, get_travel_policy,
+    )
+
+    tools = [search_flights, search_hotels, get_travel_policy]
+
+    # --- Episodic memory tools (Cosmos DB) ---
+    if cosmos_container is not None:
+        @tool
+        async def recall_events(
+            user_id: str, event_type: str = "", limit: int = 5
+        ) -> str:
+            """Recall past events for a user from episodic memory.
+            Optionally filter by event_type: trip, preference, or feedback."""
+            query = "SELECT * FROM c WHERE c.user_id = @uid"
+            params = [{"name": "@uid", "value": user_id}]
+            if event_type:
+                query += " AND c.event_type = @etype"
+                params.append({"name": "@etype", "value": event_type})
+            query += " ORDER BY c.timestamp DESC OFFSET 0 LIMIT @lim"
+            params.append({"name": "@lim", "value": limit})
+
+            items = [item async for item in cosmos_container.query_items(
+                query, parameters=params, partition_key=user_id
+            )]
+            if not items:
+                return f"No events found for {user_id}"
+            return json.dumps(items, indent=2, default=str)
+
+        @tool
+        async def store_event(
+            user_id: str, event_type: str, description: str, details: str = "{}"
+        ) -> str:
+            """Store a new episodic event for a user.
+            event_type should be: trip, preference, or feedback.
+            details is a JSON string with additional structured data."""
+            import uuid as _uuid
+            doc = {
+                "id": f"{user_id}-{_uuid.uuid4().hex[:8]}",
+                "user_id": user_id,
+                "event_type": event_type,
+                "description": description,
+                "details": json.loads(details) if isinstance(details, str) else details,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            await cosmos_container.upsert_item(doc)
+            return f"Stored event: {description}"
+
+        tools.extend([recall_events, store_event])
+
+    # --- RAG tools (AI Search) ---
+    if search_client is not None and openai_client is not None:
+        from azure.search.documents.models import VectorizedQuery
+
+        def _get_embedding(text: str) -> list[float]:
+            response = openai_client.embeddings.create(
+                input=text[:8000], model=embedding_model
+            )
+            return response.data[0].embedding
+
+        @tool
+        async def search_travel_policies(
+            query: str, category: str = "", top_k: int = 3
+        ) -> str:
+            """Search corporate travel policies, procedures, and compliance documents.
+            Use this to find current policy information about budgets, vendors,
+            safety requirements, expense rules, and booking procedures."""
+            vector_query = VectorizedQuery(
+                vector=_get_embedding(query),
+                k_nearest_neighbors=top_k,
+                fields="content_vector",
+            )
+            filter_expr = f"category eq '{category}'" if category else None
+            results = search_client.search(
+                search_text=query,
+                vector_queries=[vector_query],
+                filter=filter_expr,
+                top=top_k,
+                select=["id", "title", "content", "category", "version"],
+            )
+            docs = [
+                {"title": r["title"], "content": r["content"][:1000],
+                 "version": r["version"]}
+                for r in results
+            ]
+            if not docs:
+                return "No matching policies found."
+            return json.dumps(docs, indent=2)
+
+        tools.append(search_travel_policies)
+
+    # --- Add extra tools ---
+    if extra_tools:
+        tools.extend(extra_tools)
+
+    # --- Build agent ---
+    instructions = SYSTEM_PROMPT + (
+        "\n\nYou have access to the user's episodic memory and corporate travel policies. "
+        "Before making recommendations, recall the user's past events and preferences. "
+        "The current user is Sarah Chen (employee E001)."
+    )
+    if instructions_suffix:
+        instructions += "\n\n" + instructions_suffix
+
+    agent_kwargs = dict(
+        client=client,
+        name=name,
+        instructions=instructions,
+        tools=tools,
+    )
+    if context_providers:
+        agent_kwargs["context_providers"] = context_providers
+    if middleware:
+        agent_kwargs["middleware"] = middleware
+
+    return Agent(**agent_kwargs)
+
+
+def setup_backends(credential, env_path: str = "../.env"):
+    """
+    Connect to Cosmos DB and AI Search. Returns (cosmos_container, search_client, openai_client).
+
+    Requires env vars: COSMOS_ENDPOINT, AZURE_SEARCH_ENDPOINT, AZURE_SEARCH_KEY,
+    FOUNDRY_PROJECT_ENDPOINT, and optionally AZURE_OPENAI_EMBEDDING_DEPLOYMENT.
+    """
+    import os
+    from dotenv import load_dotenv
+    load_dotenv(env_path, override=True)
+
+    # Cosmos DB (async client)
+    from azure.cosmos.aio import CosmosClient
+    cosmos = CosmosClient(os.environ["COSMOS_ENDPOINT"], credential=credential)
+    db = cosmos.get_database_client("travel-memory")
+    cosmos_container = db.get_container_client("episodic-events")
+
+    # AI Search
+    from azure.search.documents import SearchClient
+    from azure.core.credentials import AzureKeyCredential
+    search_client = SearchClient(
+        endpoint=os.environ["AZURE_SEARCH_ENDPOINT"],
+        index_name="travel-policies",
+        credential=AzureKeyCredential(os.environ["AZURE_SEARCH_KEY"]),
+    )
+
+    # OpenAI embeddings (account-level endpoint)
+    from openai import OpenAI
+    foundry_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"]
+    account_endpoint = foundry_endpoint.split("/api/projects")[0]
+    token = credential.get_token("https://cognitiveservices.azure.com/.default").token
+    openai_client = OpenAI(
+        base_url=f"{account_endpoint}/openai/v1",
+        api_key="placeholder",
+        default_headers={"Authorization": f"Bearer {token}"},
+    )
+
+    return cosmos_container, search_client, openai_client
