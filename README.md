@@ -1,32 +1,36 @@
 # Agentic Memory Tutorial Series
 
-A progressive tutorial teaching memory patterns in AI agents — from foundations through lifecycle management to multi-agent architecttic — using a **Corporate Travel Assistant** as the consistent scenario.
+A progressive tutorial teaching memory patterns in AI agents — from foundations through lifecycle management to a unified production agent — using a **Corporate Travel Assistant** as the consistent scenario.
 
-Every notebook follows a **problem-first** structure: demonstrate a failure → name it → introduce the fix → show the payoff.
+Every notebook follows a **problem-first** structure: demonstrate a failure → name it → introduce the fix → show the payoff. Each module builds on the previous one — the same agent accumulates capabilities until Module 10, where everything converges into one agent that does memory well.
 
 ## Learning Journey
 
-| Module | Folder | What You'll Build |
-|--------|--------|-------------------|
-| **01 Foundations** | `01_foundations/` | Stateless vs stateful agents; session memory basics |
-| **02 Memory Layers** | `02_memory_layers/` | Chat history (Cosmos), episodic (Cosmos), semantic (Neo4j), procedural (Skills) |
-| **03 Memory Lifecycle** | `03_memory_lifecycle/` | Identification, promotion, belief revision, retention, episodic/procedural lifecycle |
-| **04 Provenance & Audit** | `04_provenance_and_audit/` | Who created a memory, why it was trusted, how it influenced decisions |
-| **05 Retrieval** | `05_retrieval/` | Hybrid search, re-ranking, context window management |
-| **06 Governance** | `06_governance/` | Policy enforcement, access control, compliance |
-| **07 Security** | `07_security/` | Memory poisoning defense, prompt injection, isolation |
-| **08 Evaluation** | `08_evaluation/` | Measuring memory quality, precision, staleness |
-| **09 Multi-Agent** | `09_multi_agent/` | Shared memory, handoff, multi-user isolation |
-| **10 Frontier** | `10_frontier/` | Emerging patterns and research directions |
+| Module | Folder | Notebooks | What You'll Build |
+|--------|--------|-----------|-------------------|
+| **01 Foundations** | `01_foundations/` | 1 | Stateless vs stateful agents; session memory basics |
+| **02 Memory Layers** | `02_memory_layers/` | 4 | Chat history (Cosmos), episodic (Cosmos), semantic (Neo4j), procedural (SkillsProvider) |
+| **03 Memory Lifecycle** | `03_memory_lifecycle/` | 7 | Identification, staged promotion (Neo4j), belief revision (SCD Type 2), retention, episodic/procedural lifecycle |
+| **04 Provenance & Confidence** | `04_provenance_and_audit/` | 1 | `explain_belief` tool + confidence-aware recall (assert / hedge / ask) |
+| **05 Retention & Routing** | `05_retrieval/` | 2 | Bounded memory with eviction scoring; multi-store agent (LLM-as-router) |
+| **06 Governance & User Control** | `06_governance/` | 2 | User inspect/correct/delete tools; role-based memory scoping via middleware |
+| **07 Security** | `07_security/` | 2 | Memory poisoning attacks (3 channels); defense-in-depth (origin ceiling + Sybil resistance) |
+| **08 Evaluation** | `08_evaluation/` | 2 | MEMPROBE-style quality probing; sycophancy + adversarial robustness testing |
+| **09 Multi-Agent** | `09_multi_agent/` | 2 | Scoped memory handoff between agents; cross-user isolation on shared Neo4j |
+| **10 Unified Agent** | `10_unified_agent/` | 1 | Capstone: one MAF agent with ALL memory capabilities in a 12-turn demo |
+
+**Total: 24 notebooks** — each using Microsoft Agent Framework (MAF) agents with `@tool`, never standalone Python demo code.
 
 ## Scenario: Corporate Travel Assistant
 
-Throughout this series, we build a travel booking system that:
-- **Remembers** past trips and experiences (episodic memory — Cosmos DB)
-- **Knows** preferences and relationships (semantic memory — Neo4j)
-- **Follows** company policies and procedures (procedural memory — SKILL.md files)
-- **Grounds** answers in authoritative policy (RAG via AI Search)
-- **Manages** memory lifecycle: identification → promotion → revision → retention
+Throughout this series, we build **one** travel booking agent that progressively gains:
+- **Memory layers** — past trips (episodic / Cosmos DB), preferences (semantic / Neo4j), policies (procedural / SkillsProvider), chat history (AgentSession)
+- **Lifecycle management** — what to store, when to trust it, how to revise it, when to evict it
+- **Provenance & confidence** — explain any belief, hedge uncertain ones, assert confirmed ones
+- **Governance** — users inspect/correct/delete their profile; agents see only their allowed scope
+- **Security** — staged promotion + origin ceiling + Sybil-resistant corroboration = 0% attack success
+- **Evaluation** — memory quality probing, sycophancy detection, adversarial robustness
+- **Multi-agent** — scoped handoff, cross-user isolation on shared storage
 
 ## Prerequisites
 
@@ -68,31 +72,57 @@ agentic-memory/
 │   ├── 04_procedural_memory.ipynb # Skills + budget rules
 │   ├── skills/                    # SKILL.md procedure files
 │   └── steps/                     # Backend setup guides
-├── 03_memory_lifecycle/           # Complete lifecycle management
+├── 03_memory_lifecycle/           # Lifecycle management (Neo4j-backed)
 │   ├── 00_setup_ai_search.ipynb   # RAG index provisioning
 │   ├── 01_memory_vs_rag.ipynb     # Context vs RAG vs Memory
-│   ├── 02_memory_identification.ipynb  # What to store
-│   ├── 03_staged_promotion.ipynb  # Trust state machine
-│   ├── 04_belief_revision.ipynb   # Bi-temporal fact tracking
+│   ├── 02_memory_identification.ipynb  # SkillsProvider + ToolApprovalMiddleware
+│   ├── 03_staged_promotion_neo4j.ipynb # GraphPromotionStore trust state machine
+│   ├── 04_belief_revision.ipynb   # GraphBeliefStore + SCD Type 2
 │   ├── 05_retention_and_decay.ipynb # Bounded memory + eviction
 │   ├── 06_episodic_lifecycle.ipynb # TTL + cross-session graduation
 │   ├── 07_procedural_lifecycle.ipynb # RAG validation of procedures
-│   └── lifecycle_utils.py         # Shared dataclasses + engines
-├── 04_provenance_and_audit/       # (planned)
-├── 05_retrieval/                  # (planned)
-├── 06_governance/                 # (planned)
-├── 07_security/                   # (planned)
-├── 08_evaluation/                 # (planned)
-├── 09_multi_agent/                # (planned)
-├── 10_frontier/                   # (planned)
+│   ├── lifecycle_utils.py         # Shared stores + engines (grows each module)
+│   └── skills/                    # Memory identification skills
+├── 04_provenance_and_audit/       # Provenance + confidence-aware recall
+│   └── 01_provenance_and_confidence.ipynb
+├── 05_retrieval/                  # Retention + multi-store routing
+│   ├── 01_retention_and_decay.ipynb
+│   └── 02_memory_routing.ipynb
+├── 06_governance/                 # User control + access scoping
+│   ├── 01_user_control.ipynb
+│   └── 02_access_control.ipynb
+├── 07_security/                   # Attack surface + defense layers
+│   ├── 01_attack_surface.ipynb
+│   └── 02_defense_in_depth.ipynb
+├── 08_evaluation/                 # Quality probing + sycophancy testing
+│   ├── 01_memory_quality.ipynb
+│   └── 02_sycophancy_and_adversarial.ipynb
+├── 09_multi_agent/                # Handoff + cross-user isolation
+│   ├── 01_memory_handoff.ipynb
+│   └── 02_shared_memory.ipynb
+├── 10_unified_agent/              # Capstone: one agent, all capabilities
+│   └── 01_unified_memory_agent.ipynb
 ├── data/                          # Employees, flights, hotels, policies
-│   └── policies/                  # Corporate policy documents (RAG source)
 ├── shared/                        # Reusable utilities
 │   └── travel_agent.py            # Client factory, tools, system prompt
 ├── notebooks/                     # Legacy notebook layout (being migrated)
 ├── requirements.txt
 └── azure.yaml
 ```
+
+## Shared Infrastructure: `lifecycle_utils.py`
+
+All lifecycle capabilities accumulate in one shared module:
+
+| Class | Module | Purpose |
+|-------|--------|---------|
+| `GraphPromotionStore` | 3.3 | Trust state machine: candidate → provisional → trusted |
+| `GraphBeliefStore` | 3.4 | SCD Type 2 belief revision with time-travel queries |
+| `RetentionScorer` | 3.5 / 5.1 | Multi-signal scoring for bounded memory eviction |
+| `MemoryScopeMiddleware` | 6.2 | Role-based memory filtering via MAF middleware |
+| `create_baseline_agent()` | 3.x | Factory with `context_providers` + `middleware` params |
+
+Each later module adds methods to these classes rather than creating new ones.
 
 ## Environment Variables
 
