@@ -1,12 +1,17 @@
-# 05 Retrieval — Implementation Plan
+# 05 Retention & Routing — Implementation Plan
 
 ## Module Narrative
 
-> "Retrieve the RIGHT memory at the right time with the right confidence."
+> "Bounded memory: know what to keep, know where to look."
 
-With memory stored (02), lifecycle managed (03), and provenance tracked (04), this module focuses on the retrieval problem: given a user query, how does the agent decide WHICH memory store to query, and how does confidence influence what gets surfaced?
+Memory grows without bound. This module addresses two problems:
+1. **Retention** — the agent must actively manage its memory capacity, evicting
+   low-value beliefs before the store becomes noisy
+2. **Routing** — with four memory types available (chat history, episodic, semantic,
+   procedural), the agent must pick the right store for each query
 
-This module addresses retrieval routing across memory types and confidence-weighted ranking at query time.
+Both are implemented as agent tools, not standalone Python classes.
+The LLM **is** the router — it picks which tools to call.
 
 ---
 
@@ -14,153 +19,159 @@ This module addresses retrieval routing across memory types and confidence-weigh
 
 ---
 
-## Notebook: `01_memory_router.ipynb`
+## Already Built (Module 3)
+
+| Capability | Where | Method |
+|---|---|---|
+| Retention scoring | `RetentionScorer` class | `score()`, `rank()`, `select_for_eviction()` |
+| Staleness sweep | `GraphPromotionStore.staleness_sweep()` | Deprecates stale preferences |
+| Deprecation sweep | `GraphPromotionStore.deprecation_sweep()` | Deletes deprecated preferences |
+| Gated recall | `GraphPromotionStore.gated_recall()` | Only returns trusted/provisional |
+| Belief snapshot | `GraphBeliefStore.snapshot()` | Lists all current beliefs |
+
+**What's new**: wiring `RetentionScorer` to Neo4j graph + agent tools for eviction,
+and building a multi-store agent that routes queries to the right memory type.
+
+---
+
+## Notebook 01: `01_retention_and_decay.ipynb`
 
 ### Objective
 
-Build a memory router that determines which memory stores to query based on the nature of the user's request. Not every query needs all four memory types.
+Wire the existing `RetentionScorer` to the Neo4j graph and give the agent tools
+to manage bounded memory — scoring beliefs, evicting low-value ones, and explaining
+why each belief was kept or dropped.
 
-### Key Concepts
+### Builds On
 
-- Query classification: factual (→ semantic), temporal (→ episodic), procedural (→ skills), conversational (→ chat history)
-- Multi-store queries: some questions require combining results from multiple stores
-- Hierarchical retrieval: summary first, drill down to details if needed
-- Cost-aware routing: don't query expensive stores for simple questions
+- `RetentionScorer` (Module 3, lifecycle_utils.py) — scoring weights, eviction selection
+- `GraphBeliefStore` (Module 3.4) — `snapshot()`, `store()`, SCD Type 2
+- `GraphPromotionStore` (Module 3.3) — `staleness_sweep()`, `deprecation_sweep()`
 
-### Implementation Steps
-
-1. Build `MemoryRouter` that classifies incoming queries:
-   ```
-   "What hotel does Sarah prefer?" → semantic memory (knowledge graph)
-   "What happened on her last trip?" → episodic memory (event store)
-   "How do I book international flights?" → procedural memory (skills)
-   "What did we discuss earlier?" → chat history
-   "Book Sarah a hotel in NYC" → semantic (preferences) + procedural (booking steps)
-   ```
-2. Implement routing strategies:
-   - **Single-store**: query only the most relevant store
-   - **Fan-out**: query multiple stores, merge results
-   - **Hierarchical**: query summary layer first, drill down if insufficient
-3. Build result merging logic:
-   - Deduplicate overlapping results
-   - Rank by confidence × relevance × recency
-   - Present with source attribution ("From your past trips..." vs "Based on your preferences...")
-4. Demo: same query answered differently based on what's available in each store
-5. Show cost comparison: fan-out (expensive, thorough) vs single-store (cheap, focused)
-
-### Code Pattern
+### New in `lifecycle_utils.py`
 
 ```python
-class MemoryRouter:
-    async def route(self, query: str, context: ConversationContext) -> RoutingPlan:
-        """Determine which memory stores to query and in what order."""
-        classification = await self.classify_query(query)
+# Add to GraphBeliefStore or new class:
+async def score_beliefs(self, scorer: RetentionScorer) -> list[dict]:
+    # Score all current beliefs using RetentionScorer weights.
+    # Returns: [{category, preference, score, breakdown: {recency, frequency, ...}}]
 
-        if classification.type == "factual":
-            return RoutingPlan(primary=MemoryStore.SEMANTIC, fallback=MemoryStore.EPISODIC)
-        elif classification.type == "temporal":
-            return RoutingPlan(primary=MemoryStore.EPISODIC)
-        elif classification.type == "procedural":
-            return RoutingPlan(primary=MemoryStore.PROCEDURAL)
-        elif classification.type == "compound":
-            return RoutingPlan(stores=classification.relevant_stores, strategy="fan_out")
-
-    async def retrieve(self, query: str) -> list[RankedMemory]:
-        """Route query and merge results with confidence-weighted ranking."""
-        plan = await self.route(query)
-        results = await self.execute_plan(plan, query)
-        return self.rank_and_merge(results)
+async def evict(self, scorer: RetentionScorer, count: int = None) -> list[dict]:
+    # Evict lowest-scoring beliefs. Returns list of evicted beliefs with reasons.
+    # Marks beliefs as superseded with valid_to = now, reason = "retention_eviction"
 ```
+
+### Agent Tools
+
+| Tool | Purpose |
+|------|---------|
+| `remember_belief` | Same as 3.4 — store preference |
+| `recall_current_beliefs` | Same as 3.4 — retrieve current beliefs |
+| `show_retention_scores` | Show all beliefs ranked by retention score with breakdown |
+| `run_memory_cleanup` | Evict N lowest-scoring beliefs, return what was dropped and why |
+
+### Demo Flow (6 turns)
+
+1. **Populate** — Agent stores 15+ beliefs across categories (home_city, hotel, airline,
+   diet, seat, airport, budget_tier, meal_time, loyalty_program, rental_car, etc.)
+2. **Score** — User asks "How valuable is each of my preferences?"
+   → Agent calls `show_retention_scores` → ranked list with breakdown
+3. **Explain** — User asks "Why is my rental car preference scored so low?"
+   → "Stored 6 months ago, never accessed, no confirmations, low specificity"
+4. **Evict** — User says "Clean up my preferences, keep only the important ones"
+   → Agent calls `run_memory_cleanup(count=5)` → drops 5 lowest-scoring beliefs
+5. **Verify** — `recall_current_beliefs` shows reduced set; evicted ones are gone
+6. **Audit** — `belief_history` for an evicted category shows it was superseded with
+   reason "retention_eviction" — the eviction is recorded, not silently deleted
+
+### Scoring Formula (from existing RetentionScorer)
+
+```
+score = w_age × recency_decay
+      + w_freq × access_frequency
+      + w_success × success_correlation
+      + w_redundancy × (1 - redundancy_penalty)
+      + w_specificity × specificity_score
+```
+
+### 📄 Reference Papers
+
+**"Are We Ready For An Agent-Native Memory System?"** (arXiv:2606.24775)
+> Localized maintenance is more cost-efficient than global reorganization.
+> Our per-belief scoring aligns with this — evict individually, not batch-wipe.
+
+**"Less Context, More Accuracy"** (arXiv:2606.09900)
+> Lean retrieved context outperforms full history. Retention ensures the recall
+> set stays lean by proactively dropping low-value entries.
+
+---
+
+## Notebook 02: `02_memory_routing.ipynb`
+
+### Objective
+
+Build a single agent with access to all four memory types (chat history, episodic,
+semantic/graph, procedural/skills). The LLM routes queries to the right store by
+choosing which tools to call — no separate MemoryRouter class needed.
+
+### Builds On
+
+- `create_baseline_agent()` — factory with `extra_tools`, `context_providers`, `middleware`
+- Episodic memory (Module 2.2) — Cosmos DB event store
+- Semantic memory (Module 2.3) — Neo4j graph (preferences + beliefs)
+- Procedural memory (Module 2.4) — `SkillsProvider` for travel booking skills
+- Chat history (Module 2.1) — `AgentSession` + `CompactionProvider`
+
+### Agent Tools (multi-store)
+
+| Tool | Store | Query Type |
+|------|-------|-----------|
+| `recall_current_beliefs` | Neo4j (semantic) | "What hotel do I prefer?" |
+| `recall_past_events` | Cosmos DB (episodic) | "What happened on my last trip?" |
+| `search_policies` | AI Search (procedural) | "What's the international booking process?" |
+| `search_flights`, `search_hotels` | Local data | Operational queries |
+| `remember_belief` | Neo4j (semantic) | Store new preferences |
+
+Chat history is implicit via `AgentSession` + `CompactionProvider`.
+
+### Demo Flow (5 turns)
+
+1. **Semantic query** — "What hotel chain do I prefer?"
+   → Agent calls `recall_current_beliefs` → Neo4j
+2. **Episodic query** — "What happened on my trip to Chicago last month?"
+   → Agent calls `recall_past_events` → Cosmos DB
+3. **Procedural query** — "How do I book an international flight?"
+   → Agent picks up skills from `SkillsProvider` → AI Search
+4. **Compound query** — "Book me a hotel in Tokyo based on my usual preferences"
+   → Agent calls `recall_current_beliefs` (preferences) THEN `search_hotels` (availability)
+5. **Chat reference** — "What did I just ask about?"
+   → Answered from `AgentSession` chat history (no tool call needed)
+
+### Key Insight: The LLM Is the Router
+
+There is no `MemoryRouter` class with `if classification == "factual"` logic.
+The agent's system prompt describes each tool's purpose, and the LLM's tool-calling
+capability naturally routes queries to the right store. This is the simplest correct
+implementation — adding a classifier in front of the LLM is redundant.
 
 ### 📄 Reference Paper
 
 **"Are We Ready For An Agent-Native Memory System?"** (arXiv:2606.24775)
-
-Authors: Zhou, Zhou, Han, Xu, Li, Li, Xiong, Wu (Jun 2026)
-
-> Systematic experimental study decomposing agent memory into 4 core modules: representation/storage, extraction, retrieval/routing, and maintenance. Evaluates 12 representative memory systems across 5 benchmark workloads spanning 11 datasets. Key finding: **no single architecture dominates across all scenarios; effectiveness depends on how well memory structure aligns with workload bottleneck**. Localized maintenance is more cost-efficient than global reorganization. **Relevant here**: validates that routing is critical — the router must match query type to the right memory architecture.
-
----
-
-## Notebook: `02_confidence_weighted_retrieval.ipynb`
-
-### Objective
-
-Implement retrieval that uses confidence scores (from Module 04) to influence ranking, presentation, and agent behaviour — surfacing high-confidence memories as facts and low-confidence ones as questions.
-
-### Key Concepts
-
-- Confidence-weighted ranking: don't just sort by relevance; factor in trust level
-- Presentation strategy: assert (high), hedge (medium), ask (low), suppress (very low)
-- Retrieval-time confidence adjustment: stored confidence × recency decay × query relevance
-- Reflective loop: if initial retrieval is low-confidence, try broader/alternative queries
-
-### Implementation Steps
-
-1. Build `ConfidenceWeightedRetriever`:
-   - Retrieve candidates by relevance (embedding similarity / graph traversal)
-   - Adjust scores by retrieval-time confidence (from 04_confidence_scoring)
-   - Apply presentation strategy based on final score
-2. Implement reflective retrieval loop:
-   - First attempt: standard retrieval
-   - If all results < confidence threshold: broaden query (remove constraints)
-   - If still insufficient: flag for user clarification rather than guessing
-3. Demo scenario:
-   - Query: "What's Sarah's dietary preference?"
-   - Result A: "Vegetarian" (confidence 0.92, confirmed 4 times) → assert
-   - Result B: "Avoids gluten" (confidence 0.45, inferred once) → hedge/ask
-   - Agent says: "Sarah is vegetarian. I also have a note she may avoid gluten — should I filter for gluten-free options too?"
-4. Show failure mode: what happens WITHOUT confidence weighting (agent asserts uncertain facts)
-5. Compare strategies: always-assert vs confidence-aware vs always-ask
-
-### Code Pattern
-
-```python
-class ConfidenceWeightedRetriever:
-    async def retrieve(self, query: str, user_id: str) -> list[PresentableMemory]:
-        candidates = await self.raw_retrieve(query, user_id)
-
-        results = []
-        for memory in candidates:
-            confidence = self.confidence_calculator.compute_retrieval_confidence(memory)
-            presentation = self.determine_presentation(confidence)
-            results.append(PresentableMemory(
-                content=memory.content,
-                confidence=confidence,
-                presentation=presentation,  # "assert" | "hedge" | "ask" | "suppress"
-                source_attribution=memory.provenance.source_type
-            ))
-
-        return sorted(results, key=lambda r: r.confidence.composite, reverse=True)
-
-    def determine_presentation(self, confidence: ConfidenceScore) -> str:
-        if confidence.composite >= 0.85:
-            return "assert"
-        elif confidence.composite >= 0.55:
-            return "hedge"
-        elif confidence.composite >= 0.30:
-            return "ask"
-        else:
-            return "suppress"
-```
-
-### 📄 Reference Paper
-
-**"Less Context, More Accuracy: A Bi-Temporal Memory Engine for LLM Agents Where a Lean Retrieved Context Beats the Full History"** (arXiv:2606.09900)
-
-Authors: Wang (Jun 2026)
-
-> Shows that a lean, curated retrieval context outperforms dumping full history into the prompt. The bi-temporal engine maintains temporal validity and retrieves only currently-relevant facts. Key finding: **quality of retrieved context matters more than quantity** — aligns with confidence-weighted approach where we suppress low-confidence memories rather than surfacing everything.
+> No single memory architecture dominates across all scenarios — effectiveness
+> depends on how well memory structure aligns with workload. Our multi-tool
+> approach lets the LLM match query type to the right store naturally.
 
 ---
 
 ## Prerequisites
 
-- Module 02 (all four memory stores operational)
-- Module 04 (confidence scoring and provenance available)
+- Module 2 (all four memory stores operational)
+- Module 3 (lifecycle management — retention scoring, belief store)
+- Module 4 (confidence-aware recall for ranking)
+- Cosmos DB, Neo4j, AI Search provisioned
 
 ## Outputs for Later Modules
 
-- `MemoryRouter` → used by 09_multi_agent for routing in multi-agent handoff
-- Confidence-weighted retrieval → used by 08_evaluation for measuring retrieval quality
-- Presentation strategies → used by 06_governance (user control interface)
+- Multi-store agent → foundation for Module 09 (multi-agent handoff)
+- Retention eviction → used by Module 08 (evaluation — measure what's lost)
+- Routing patterns → used by Module 10 (unified agent)
