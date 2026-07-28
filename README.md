@@ -10,7 +10,7 @@ Every notebook follows a **problem-first** structure: demonstrate a failure → 
 |--------|--------|-----------|-------------------|
 | **01 Foundations** | `01_foundations/` | 1 | Stateless vs stateful agents; session memory basics |
 | **02 Memory Layers** | `02_memory_layers/` | 4 | Chat history (Cosmos), episodic (Cosmos), semantic (Neo4j), procedural (SkillsProvider) |
-| **03 Memory Lifecycle** | `03_memory_lifecycle/` | 7 | Identification, staged promotion (Neo4j), belief revision (SCD Type 2), retention, episodic/procedural lifecycle |
+| **03 Memory Lifecycle** | `03_memory_lifecycle/` | 7 | Memory vs RAG, identification, staged promotion (Neo4j), belief revision (SCD Type 2), retention, episodic + procedural lifecycle |
 | **04 Provenance & Confidence** | `04_provenance_and_audit/` | 1 | `explain_belief` tool + confidence-aware recall (assert / hedge / ask) |
 | **05 Retention & Routing** | `05_retrieval/` | 2 | Bounded memory with eviction scoring; multi-store agent (LLM-as-router) |
 | **06 Governance & User Control** | `06_governance/` | 2 | User inspect/correct/delete tools; role-based memory scoping via middleware |
@@ -78,9 +78,8 @@ agentic-memory/
 │   ├── 02_memory_identification.ipynb  # SkillsProvider + ToolApprovalMiddleware
 │   ├── 03_staged_promotion_neo4j.ipynb # GraphPromotionStore trust state machine
 │   ├── 04_belief_revision.ipynb   # GraphBeliefStore + SCD Type 2
-│   ├── 05_retention_and_decay.ipynb # Bounded memory + eviction
-│   ├── 06_episodic_lifecycle.ipynb # TTL + cross-session graduation
-│   ├── 07_procedural_lifecycle.ipynb # RAG validation of procedures
+│   ├── 05_retention_and_decay.ipynb # Bounded memory + eviction scoring
+│   ├── 06_episodic_and_procedural_lifecycle.ipynb # TTL-based episodic + 3-tier procedural
 │   ├── lifecycle_utils.py         # Shared stores + engines (grows each module)
 │   └── skills/                    # Memory identification skills
 ├── 04_provenance_and_audit/       # Provenance + confidence-aware recall
@@ -105,7 +104,7 @@ agentic-memory/
 ├── data/                          # Employees, flights, hotels, policies
 ├── shared/                        # Reusable utilities
 │   └── travel_agent.py            # Client factory, tools, system prompt
-├── notebooks/                     # Legacy notebook layout (being migrated)
+├── notebooks/                     # Standalone versions (01-07) for workshop use
 ├── requirements.txt
 └── azure.yaml
 ```
@@ -116,11 +115,13 @@ All lifecycle capabilities accumulate in one shared module:
 
 | Class | Module | Purpose |
 |-------|--------|---------|
+| `PromotionEngine` | 3.3 | Configurable promotion criteria evaluation |
 | `GraphPromotionStore` | 3.3 | Trust state machine: candidate → provisional → trusted |
 | `GraphBeliefStore` | 3.4 | SCD Type 2 belief revision with time-travel queries |
-| `RetentionScorer` | 3.5 / 5.1 | Multi-signal scoring for bounded memory eviction |
-| `MemoryScopeMiddleware` | 6.2 | Role-based memory filtering via MAF middleware |
-| `create_baseline_agent()` | 3.x | Factory with `context_providers` + `middleware` params |
+| `RetentionScorer` | 3.5 | Multi-signal scoring for bounded memory eviction |
+| `GraphRetentionStore` | 3.5 | Neo4j-backed capacity-bounded memory store |
+| `EpisodicTTLConfig` | 3.6 | TTL configuration for episodic event expiry |
+| `ProceduralReflection` | 3.6 | Data model for agent-learned procedural lessons |
 
 Each later module adds methods to these classes rather than creating new ones.
 
