@@ -688,6 +688,150 @@ class RetentionScorer:
 
 
 # ---------------------------------------------------------------------------
+# Graph-Backed Retention (Neo4j)
+# ---------------------------------------------------------------------------
+
+class GraphRetentionStore:
+    """Bounded retention scoring on Neo4j preference nodes.
+
+    Reads all lifecycle-managed preferences (those with ``state IS NOT NULL``),
+    scores them using ``RetentionScorer``, writes scores back, and evicts the
+    lowest-scored by setting their state to DEPRECATED.
+
+    Composes with ``GraphPromotionStore`` and ``GraphBeliefStore``: retention
+    never touches ``valid_from``/``valid_to`` or ``confirmation_count``.  It only
+    reads existing properties to compute scores and writes ``retention_score``,
+    ``last_scored``, and ``state`` (on eviction).
+
+    **User isolation**: all operations scoped to ``user_id``.
+    """
+
+    def __init__(self, memory, user_id: str, scorer: RetentionScorer = None,
+                 capacity: int = 50):
+        self._m = memory
+        self._user_id = user_id
+        self.scorer = scorer or RetentionScorer(capacity=capacity)
+        self.capacity = capacity
+
+    async def reset(self) -> None:
+        """Remove retention metadata so demo re-runs start clean."""
+        await self._m._client.execute_write(
+            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
+            "REMOVE p.retention_score, p.last_scored",
+            {"uid": self._user_id},
+        )
+
+    async def add_preference(self, category: str, preference: str,
+                             state: str = "candidate", access_count: int = 0,
+                             success_correlation: float = 0.0,
+                             age_days: int = 0) -> None:
+        """Helper: add a preference with retention-relevant metadata for demos."""
+        pref = await self._m.long_term.add_preference(
+            category=category, preference=preference,
+            confidence=0.7, user_identifier=self._user_id,
+        )
+        await self._m._client.execute_write(
+            """MATCH (p:Preference {id:$id})
+               SET p.state = $state,
+                   p.access_count = $ac,
+                   p.success_correlation = $sc,
+                   p.first_seen = datetime() - duration({days:$age}),
+                   p.last_accessed = CASE WHEN $ac > 0
+                       THEN datetime() - duration({days: toInteger($age * 0.3)})
+                       ELSE null END,
+                   p.category = $cat""",
+            {"id": str(pref.id), "state": state, "ac": access_count,
+             "sc": success_correlation, "age": age_days, "cat": category},
+        )
+
+    async def score_all(self) -> list[dict]:
+        """Score all lifecycle-managed preferences and write scores back.
+        Returns list of {preference, score, state} sorted ascending (evict-first)."""
+        rows = await self._m.query.cypher(
+            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
+            "WHERE p.state IS NOT NULL AND p.state <> 'deprecated' "
+            "RETURN p.id AS id, p.preference AS preference, p.state AS state, "
+            "       p.access_count AS access_count, "
+            "       p.success_correlation AS success_correlation, "
+            "       p.first_seen AS first_seen, p.last_accessed AS last_accessed, "
+            "       p.confirmation_count AS confirmation_count, "
+            "       coalesce(size(p.preference), 0) AS content_length",
+            params={"uid": self._user_id},
+        )
+        scored = []
+        for r in rows:
+            # Build a MemoryItem-like object for the scorer
+            m = MemoryItem(
+                id=r["id"], content=r["preference"] or "",
+                state=MemoryState(r["state"]) if r["state"] else MemoryState.CANDIDATE,
+                access_count=r.get("access_count") or 0,
+                success_correlation=r.get("success_correlation") or 0.0,
+                first_seen=self._parse_neo4j_dt(r.get("first_seen")),
+                last_accessed=self._parse_neo4j_dt(r.get("last_accessed")),
+                confirmation_count=r.get("confirmation_count") or 0,
+            )
+            score = self.scorer.score(m)
+            scored.append({"id": r["id"], "preference": r["preference"],
+                           "state": r["state"], "score": score})
+        # Write scores back to Neo4j
+        for item in scored:
+            await self._m._client.execute_write(
+                "MATCH (p:Preference {id:$id}) "
+                "SET p.retention_score = $score, p.last_scored = datetime()",
+                {"id": item["id"], "score": item["score"]},
+            )
+        scored.sort(key=lambda x: x["score"])
+        return scored
+
+    async def evict(self, count: int) -> list[dict]:
+        """Deprecate the N lowest-scored preferences. Returns evicted items."""
+        scored = await self.score_all()
+        to_evict = scored[:count]
+        for item in to_evict:
+            await self._m._client.execute_write(
+                "MATCH (p:Preference {id:$id}) "
+                "SET p.state = 'deprecated', p.evicted_at = datetime()",
+                {"id": item["id"]},
+            )
+            item["state"] = "deprecated"
+        return to_evict
+
+    async def snapshot(self) -> list[dict]:
+        """All preferences with their retention scores (for display)."""
+        return await self._m.query.cypher(
+            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
+            "WHERE p.state IS NOT NULL "
+            "RETURN p.preference AS preference, p.state AS state, "
+            "       p.retention_score AS score, p.access_count AS access_count, "
+            "       p.success_correlation AS success_correlation "
+            "ORDER BY coalesce(p.retention_score, 0) DESC",
+            params={"uid": self._user_id},
+        )
+
+    async def active_count(self) -> int:
+        """Count of non-deprecated, non-deleted preferences."""
+        rows = await self._m.query.cypher(
+            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
+            "WHERE p.state IS NOT NULL AND p.state IN ['candidate','provisional','trusted'] "
+            "RETURN count(p) AS n",
+            params={"uid": self._user_id},
+        )
+        return rows[0]["n"] if rows else 0
+
+    @staticmethod
+    def _parse_neo4j_dt(val) -> datetime:
+        """Parse Neo4j datetime or return a default."""
+        if val is None:
+            return datetime.now(timezone.utc) - timedelta(days=90)
+        if isinstance(val, str):
+            return datetime.fromisoformat(val.replace("Z", "+00:00"))
+        # neo4j DateTime objects
+        if hasattr(val, "to_native"):
+            return val.to_native().replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
 # Episodic Memory Lifecycle
 # ---------------------------------------------------------------------------
 
