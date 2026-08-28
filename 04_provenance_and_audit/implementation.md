@@ -2,35 +2,98 @@
 
 ## Module Narrative
 
-> "Every memory must explain where it came from and how sure we are."
+> "A usable memory must also be able to explain why it exists."
 
-Provenance, audit trail, and confidence scoring are **not three separate systems** —
-they are facets of the same metadata that already lives on every Preference node
-in Neo4j. Module 3.3 stores `source_type` and `confidence`; Module 3.4 stores
-`valid_from / valid_to` and full SCD Type 2 history. This module surfaces that
-metadata to the user through agent tools and teaches the agent to *behave
-differently* based on confidence level.
+Module 03 completed the semantic-memory lifecycle:
 
-Maps to: FR-006 (Confidence Scoring), FR-013 (Audit Trail), FR-014 (Memory Provenance).
+- staged promotion decides whether a belief may influence the agent;
+- belief revision decides which value is current and preserves older versions;
+- retention decides which memories remain worth keeping.
+
+One problem remains at the read boundary. `GraphPromotionStore.gated_recall()`
+and `GraphBeliefStore.recall_current()` reduce a rich Neo4j node to a broad
+state tag and its text:
+
+```text
+[KNOWN] Prefers Marriott
+[LIKELY] Prefers morning flights
+```
+
+That output no longer says who or what created the memory, what evidence
+supported it, when it was recorded, or its numeric confidence. The lifecycle
+can answer *"may I use this?"* and *"which value is current?"*, but the agent
+cannot reliably answer *"why do you believe this?"* or choose language that
+reflects the strength of the evidence.
+
+Module 04 solves that specific gap. It preserves provenance and confidence
+through recall, exposes an explanation tool, and teaches the agent to assert,
+hedge, or ask without changing the lifecycle rules from Module 03.
+
+Maps to: FR-006 (Confidence Scoring), FR-013 (Audit Trail), FR-014 (Memory
+Provenance).
 
 ---
 
-## Status: 🔨 TO IMPLEMENT
+## Status: 🧪 IMPLEMENTED — READY FOR USER TESTING
 
 ---
 
-## Already Built (Module 3)
+## What Provenance Means
 
-| Capability | Where | Method |
-|---|---|---|
-| Source tracking | `GraphPromotionStore.record()` | `source_type` param (`user_assertion`, `llm_inference`) |
-| Confidence scoring | `GraphPromotionStore.record()` | `confidence` param (0–1) |
-| Audit trail | `GraphBeliefStore.history()` | Full SCD Type 2 with `valid_from / valid_to` |
-| Time-travel | `GraphBeliefStore.recall_at_time()` | Bi-temporal query by date |
-| Trust state | `GraphPromotionStore` | `candidate → provisional → trusted` lifecycle |
+**Provenance is the traceable origin and evidence chain of a memory.** It is
+more than a label such as `user_assertion` or `llm_inference`. Useful provenance
+answers:
 
-**What's new in this notebook**: the agent can *explain* its beliefs (provenance tool),
-and its *recall behaviour changes* based on confidence (assert / hedge / ask).
+1. **Who or what created it?** The user, an agent inference, a tool, or an
+   enterprise source.
+2. **Which evidence caused it?** For example, the exact user statement or the
+   observation that three recent trips departed before 9 AM.
+3. **When was it recorded?** The first-seen timestamp and later confirmation
+   timestamps.
+4. **How was it validated?** Confirmation count and lifecycle state.
+5. **How did it change?** The lineage of superseded and current values.
+
+These concepts are related but distinct:
+
+| Concept | Question it answers |
+|---|---|
+| Provenance | Where did this memory come from, and what evidence supports it? |
+| Confidence | How strongly should the system believe and communicate it? |
+| Temporal history | How did the value change over time? |
+| Trust state | Is the memory currently allowed to influence the agent? |
+
+Persisting this information prevents the model from inventing a plausible
+reason after the fact. It also gives users a basis for trusting, correcting, or
+rejecting a memory and gives developers an auditable path for debugging it.
+
+---
+
+## Separation from Module 03
+
+Module 04 has its own focused utility:
+
+```text
+04_provenance_and_audit/lifecycle_utils.py
+└── GraphProvenanceStore
+```
+
+This follows Module 03's primary-object-per-concept pattern
+(`GraphPromotionStore`, `GraphBeliefStore`, `GraphRetentionStore`) without
+adding provenance APIs to those teaching objects. `GraphProvenanceStore` reuses
+the same Neo4j `Preference` schema and lifecycle semantics, but does not import
+or modify Module 03's Python classes.
+
+### `GraphProvenanceStore` operations
+
+| Method | Purpose |
+|---|---|
+| `store()` | Persist a belief together with source, evidence, creator, confidence, and timestamps |
+| `confirm()` | Advance the established Module 03 trust state for the demo |
+| `recall_baseline()` | Reproduce Module 03's state-tagged but provenance-lossy projection |
+| `recall_with_confidence()` | Return visible beliefs with structured provenance and presentation strategy |
+| `explain()` | Return the current belief's origin, evidence, validation, and compact lineage |
+| `snapshot()` | Inspect persisted records during the notebook |
+| `reset()` | Remove only the selected user's Module 04 demo records |
 
 ---
 
@@ -39,92 +102,69 @@ and its *recall behaviour changes* based on confidence (assert / hedge / ask).
 ### Objective
 
 Extend the existing travel agent with two capabilities:
-1. **Explain tool** — answer "Why do you believe X?" by surfacing provenance + history
-2. **Confidence-aware recall** — agent asserts high-confidence beliefs, hedges medium, asks about low
 
-### Builds On
+1. **Explain a belief** — answer "Why do you believe X?" from persisted
+   provenance rather than generated rationale.
+2. **Communicate uncertainty** — assert, hedge, or ask according to both the
+   lifecycle state and numeric confidence.
 
-- `GraphBeliefStore` (Module 3.4) — `history()`, `snapshot()`, `store()` with `source_type`
-- `GraphPromotionStore` (Module 3.3) — `confidence`, `state`, `gated_recall()`
-- Same Neo4j connection, same Foundry client, same travel agent
+### Problem-First Flow
 
-### New in `lifecycle_utils.py`
+1. Recreate the output boundary left by Module 03 with `recall_baseline()`.
+2. Show two visible beliefs whose very different evidence collapses to the same
+   broad state-level output.
+3. Ask why the agent believes one of them and show that the recall result does
+   not contain enough information to answer safely.
+4. Explain provenance and distinguish it from confidence, history, and trust.
+5. Introduce structured recall and `explain_belief`.
+6. Replay the scenario and show evidence-backed, confidence-aware responses.
 
-```python
-# Add to GraphBeliefStore:
-async def explain(self, category: str) -> str:
-    # Provenance explanation: why we believe the current value for this category.
-    # Returns: source_type, first stored date, confirmation count, confidence,
-    # and the full SCD history showing how the belief evolved.
+### State Before Confidence
 
-async def recall_with_confidence(self, query: str) -> list[dict]:
-    # Recall beliefs annotated with confidence and presentation strategy.
-    # Returns each belief with:
-    #   presentation: "assert" (>=0.8) | "hedge" (>=0.5) | "ask" (<0.5)
-    # Agent uses this to decide HOW to state the belief.
-```
+Confidence never bypasses the lifecycle gate established in Module 03:
 
-### Agent Tools (4 tools — same pattern as Module 3.4)
+| State | Confidence | Presentation |
+|---|---:|---|
+| `candidate` / `deprecated` | any | Withhold |
+| `provisional` | `< 0.5` | Ask the user |
+| `provisional` | `>= 0.5` | Hedge and seek confirmation |
+| `trusted` | `>= 0.8` | Assert |
+| `trusted` | `0.5–0.79` | Hedge |
+| `trusted` | `< 0.5` | Ask the user |
 
-| Tool | Wraps | Purpose |
-|------|-------|---------|
-| `explain_belief` | `beliefs.explain(category)` | "Why do you believe I like Marriott?" → source, date, confidence |
-| `remember_belief` | `beliefs.store(...)` | Same as 3.4 — store with source_type |
-| `recall_beliefs` | `beliefs.recall_with_confidence(query)` | Recall with assert/hedge/ask annotation |
-| `belief_history` | `beliefs.history(category)` | Same as 3.4 — full SCD audit trail |
+### Agent Tools
 
-### Demo Flow (5 turns)
+| Tool | Purpose |
+|---|---|
+| `remember_belief` | Store the value and the evidence that caused it |
+| `confirm_belief` | Record a later user confirmation |
+| `recall_beliefs` | Return visible beliefs with assert/hedge/ask annotations |
+| `explain_belief` | Format only persisted origin, evidence, timestamps, confidence, confirmation, and lineage |
 
-1. **Turn 1** — User states preferences explicitly: "I prefer Marriott, aisle seats, vegetarian meals"
-   → Agent stores all three as `user_assertion` with confidence 0.95
+### Continuation Demo
 
-2. **Turn 2** — Agent infers from booking history: "Based on your last 3 trips, you seem to prefer morning flights"
-   → Stored as `llm_inference` with confidence 0.55
-
-3. **Turn 3** — User asks "What do you know about my preferences?"
-   → Agent uses `recall_beliefs` → asserts Marriott (0.95), hedges morning flights (0.55):
-   *"You prefer Marriott hotels and aisle seats. I also noticed you might prefer morning flights — should I prioritise those?"*
-
-4. **Turn 4** — User asks "Why do you think I like Marriott?"
-   → Agent uses `explain_belief("hotel_chain")` →
-   *"You told me directly on [date]: 'I always stay at Marriott'. Source: user statement, confidence: 0.95."*
-
-5. **Turn 5** — User asks "What about my flight time preference?"
-   → `explain_belief("flight_time")` →
-   *"I inferred this from your booking patterns (3 morning flights in a row). Source: inference, confidence: 0.55. This hasn't been confirmed by you."*
-
-### Key Insight: Assert vs Hedge vs Ask
-
-```
-Confidence >= 0.8  →  ASSERT:  "You prefer Marriott."
-Confidence >= 0.5  →  HEDGE:   "I believe you may prefer morning flights — should I prioritise those?"
-Confidence < 0.5  →  ASK:     "Do you have a seating preference?"
-```
-
-The agent's instructions tell it to check the `presentation` field from `recall_beliefs`
-and adjust its language accordingly. This is NOT a separate system — it's a behaviour
-change driven by the confidence metadata that already exists on every Preference node.
-
-### 📄 Reference Papers
-
-**"Uncertainty Decomposition for Clarification Seeking in LLM Agents"** (arXiv:2606.19559)
-> Separates "what the agent doesn't know" from "what the agent knows is uncertain" —
-> enabling targeted clarification. Our assert/hedge/ask maps directly to this decomposition.
-
-**"MEMPROBE: Probing Long-Term Agent Memory via Hidden User-State Recovery"** (arXiv:2606.24595)
-> Evaluates memory as an auditable artifact. Our `explain_belief` tool makes the audit
-> explicit — the user can probe any belief and get its full provenance chain.
+1. A direct Marriott statement is high confidence but begins `provisional`, so
+   it is hedged according to Module 3.3's anti-spoofing rule.
+2. A later reaffirmation promotes Marriott to `trusted`, allowing an assertion.
+3. A morning-flight pattern is stored as a medium-confidence inference with
+   concrete evidence. It begins as `candidate` and remains hidden.
+4. After confirmation it becomes `provisional`, so it is visible but hedged.
+5. A low-confidence visible belief causes a clarification question.
+6. "Why?" questions produce different explanations for direct statements and
+   inferred patterns.
+7. A revised value displays compact lineage, reusing Module 3.4 without
+   reteaching SCD Type 2.
 
 ---
 
 ## Prerequisites
 
-- Module 3.3 (GraphPromotionStore — provides confidence + source_type)
-- Module 3.4 (GraphBeliefStore — provides history + SCD Type 2)
-- Neo4j + Foundry client setup (same .env as Module 3)
+- Module 3.3 for staged trust and visibility semantics
+- Module 3.4 for current values and temporal lineage
+- The same Neo4j and Foundry configuration used in Module 03
 
 ## Outputs for Later Modules
 
-- `explain_belief` tool → reused in Module 06 (user control — users inspect their memories)
-- Confidence-aware recall → reused in Module 08 (sycophancy evaluation)
-- `recall_with_confidence()` → reused in Module 07 (defense — confidence ceiling enforcement)
+- `explain_belief` can support user inspection and correction in Module 06.
+- Confidence-aware recall can support evaluation in Module 08.
+- Persisted evidence can support origin-based security controls in Module 07.
