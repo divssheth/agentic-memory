@@ -207,154 +207,83 @@ class PromotionEngine:
 
 
 # ---------------------------------------------------------------------------
-# Graph-Backed Staged Promotion (Neo4j)
+# Cosmos-Backed Staged Promotion
 # ---------------------------------------------------------------------------
 
-class GraphPromotionStore:
-    """Staged-promotion trust state stored ON Neo4j preference nodes.
+class CosmosPromotionStore:
+    """Staged-promotion trust state stored on Cosmos DB preference documents.
 
-    Every transition is a Cypher statement executed inside the database, so the
-    same operations run unchanged from a notebook, a request handler, or a
-    scheduled maintenance job. Preferences carry a ``state`` property
-    (candidate -> provisional -> trusted -> deprecated); the agent's recall path
-    filters on it, so an untrusted write can never reach the model.
+    Every transition is a partial update (patch_item) so the same operations
+    work from a notebook, a request handler, or a scheduled maintenance job.
+    Preferences carry a ``state`` property (candidate -> provisional -> trusted
+    -> deprecated); the agent's recall path filters on it, so an untrusted
+    write can never reach the model.
 
-    **User isolation**: every preference is linked to its owner via
-    ``(:User {identifier})-[:HAS_PREFERENCE]->(:Preference)``.  All reads
-    and writes are scoped to ``user_id`` so multiple users can share one
-    Neo4j database without seeing each other's data.
-
-    Scope: every method only touches preferences that have a ``state`` property,
-    i.e. the ones this lifecycle manages. Preferences written by other modules
-    (which lack ``state``) are left untouched.
+    **User isolation**: every query filters on ``user_id`` (partition key).
     """
 
-    def __init__(self, memory, user_id: str, config: "PromotionConfig" = None):
-        self._m = memory
-        self._user_id = user_id
+    def __init__(self, store, config: "PromotionConfig" = None):
+        self._s = store  # SemanticMemoryStore
         self.config = config or PromotionConfig()
 
-    async def reset(self) -> None:
-        """Delete this user's lifecycle-managed preferences so demo re-runs start clean."""
-        await self._m._client.execute_write(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.state IS NOT NULL DETACH DELETE p",
-            {"uid": self._user_id},
-        )
+    async def reset(self) -> int:
+        """Delete this scope's preferences so demo re-runs start clean."""
+        return await self._s.reset()
 
     async def record(self, category, preference, source_type, confidence=0.7) -> str:
-        """OP1 - persist a preference with its initial trust state.
+        """Persist a preference with its initial trust state.
         user_assertion enters 'provisional' (anti-spoofing); else 'candidate'."""
-        pref = await self._m.long_term.add_preference(
-            category=category, preference=preference, confidence=confidence,
-            user_identifier=self._user_id,
-        )
         state = "provisional" if source_type == "user_assertion" else "candidate"
-        await self._m._client.execute_write(
-            """MATCH (p:Preference {id:$id})
-               SET p.state=$state, p.source_type=$src, p.confirmation_count=0,
-                   p.first_seen=datetime(),
-                   p.last_confirmed=CASE WHEN $state='provisional'
-                                         THEN datetime() ELSE null END""",
-            {"id": str(pref.id), "state": state, "src": source_type},
-        )
+        doc = await self._s.add_preference(category, preference, confidence,
+                                           source_type, state)
+        return state
         return state
 
     async def record_trusted(self, category, preference, confidence=0.9) -> None:
         """Trust-on-first-write (the anti-pattern) - write straight to trusted."""
-        await self.record(category, preference, "tool_output", confidence)
-        await self._m._client.execute_write(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference {preference:$t}) "
-            "SET p.state='trusted', p.last_confirmed=datetime()",
-            {"t": preference, "uid": self._user_id},
-        )
+        await self._s.add_preference(category, preference, confidence,
+                                     "tool_output", "trusted")
 
     async def confirm(self, preference) -> dict:
-        """OP2 - one confirmation + promotion, atomically (race-free).
-        Matches the closest stored preference by semantic search, so the agent
-        can reaffirm in its own words. Ignores preferences stored <5s ago
-        (prevents same-turn remember+confirm from skipping provisional)."""
-        hits = await self._m.long_term.search_preferences(
-            query=preference, threshold=0.0, limit=1
-        )
-        if not hits:
+        """One confirmation + promotion. Matches by semantic search."""
+        result = await self._s.confirm(preference)
+        if not result:
             return {"state": None, "confirmations": 0}
-        rows = await self._m._client.execute_write(
-            """MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference {id:$id})
-               WHERE p.first_seen < datetime() - duration({seconds:5})
-               SET p.confirmation_count=coalesce(p.confirmation_count,0)+1,
-                   p.last_confirmed=datetime()
-               WITH p
-               SET p.state=CASE
-                 WHEN p.source_type='user_assertion' AND p.confirmation_count>=1
-                     THEN 'trusted'
-                 WHEN p.confirmation_count>=$tt THEN 'trusted'
-                 WHEN p.confirmation_count>=$pt THEN 'provisional'
-                 ELSE p.state END
-               RETURN p.state AS state, p.confirmation_count AS confirmations""",
-            {"id": str(hits[0].id),
-             "tt": self.config.confirmation_threshold,
-             "pt": self.config.provisional_threshold,
-             "uid": self._user_id},
-        )
-        if not rows:
-            # Preference was too recently stored — return current state without promoting
-            snap = await self._m.query.cypher(
-                "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference {id:$id}) "
-                "RETURN p.state AS state, p.confirmation_count AS confirmations",
-                params={"id": str(hits[0].id), "uid": self._user_id},
-            )
-            return snap[0] if snap else {"state": "candidate", "confirmations": 0}
-        return rows[0]
+        return result
 
     async def snapshot(self) -> list:
         """Read this user's lifecycle-managed preferences and their live states."""
-        return await self._m.query.cypher(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.state IS NOT NULL "
-            "RETURN p.preference AS preference, p.state AS state, "
-            "p.confirmation_count AS confirmations, p.source_type AS source_type "
-            "ORDER BY p.first_seen",
-            params={"uid": self._user_id},
-        )
+        docs = await self._s.snapshot()
+        return [{"preference": d["preference"], "state": d["state"],
+                 "confirmations": d.get("confirmation_count", 0),
+                 "source_type": d.get("source_type", "")} for d in docs]
 
     async def staleness_sweep(self) -> int:
-        """OP4 - demote trusted memories unconfirmed past the window.
-        Stateless and idempotent: this is the body of a scheduled job."""
-        rows = await self._m._client.execute_write(
-            """MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference)
-               WHERE p.state='trusted'
-                 AND p.last_confirmed < datetime() - duration({days:$d})
-               SET p.state='provisional' RETURN count(p) AS demoted""",
-            {"d": self.config.staleness_days, "uid": self._user_id},
+        """Demote trusted memories unconfirmed past the staleness window."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(
+            days=self.config.staleness_days)).isoformat()
+        sql = (
+            "SELECT c.id FROM c WHERE c.user_id = @uid "
+            "AND c.state = 'trusted' AND c.last_confirmed < @cutoff"
         )
-        return rows[0]["demoted"]
-
-    async def deprecation_sweep(self) -> int:
-        """OP5 - retire memories whose confidence fell below the floor."""
-        rows = await self._m._client.execute_write(
-            """MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference)
-               WHERE p.confidence < $f AND coalesce(p.state,'')<>'deprecated'
-               SET p.state='deprecated' RETURN count(p) AS deprecated""",
-            {"f": self.config.confidence_floor, "uid": self._user_id},
-        )
-        return rows[0]["deprecated"]
+        params = [{"name": "@uid", "value": self._s._user_id},
+                  {"name": "@cutoff", "value": cutoff}]
+        if self._s.scope_tag:
+            sql += " AND c.scope_tag = @scope"
+            params.append({"name": "@scope", "value": self._s.scope_tag})
+        ids = [item["id"] async for item in self._s._c.query_items(
+            sql, parameters=params, partition_key=self._s._user_id)]
+        for doc_id in ids:
+            await self._s.set_state(doc_id, "provisional")
+        return len(ids)
 
     async def gated_recall(self, query) -> str:
-        """The agent's read path - semantic recall FILTERED BY TRUST STATE.
-        trusted -> stated as fact; provisional -> hedged; candidate/deprecated withheld.
-        Scoped to this user's preferences only (user isolation)."""
-        prefs = await self._m.long_term.search_preferences(query=query, threshold=0.0)
-        if not prefs:
-            return "No preferences found."
-        rows = await self._m.query.cypher(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.id IN $ids "
-            "RETURN p.preference AS preference, p.state AS state",
-            params={"ids": [str(p.id) for p in prefs], "uid": self._user_id},
-        )
+        """Semantic recall filtered by trust state."""
+        results = await self._s.search(query, states=["trusted", "provisional"])
+        if not results:
+            return "No trusted preferences to share yet."
         out = []
-        for r in rows:
+        for r in results:
             if r["state"] == "trusted":
                 out.append(f"[KNOWN FACT] {r['preference']}")
             elif r["state"] == "provisional":
@@ -362,30 +291,23 @@ class GraphPromotionStore:
         return "\n".join(out) if out else "No trusted preferences to share yet."
 
     async def recall_all(self, query) -> str:
-        """Ungated recall - returns every stored preference as fact (no trust filtering).
-        Still scoped to this user's preferences (user isolation)."""
-        prefs = await self._m.long_term.search_preferences(query=query, threshold=0.0)
-        if not prefs:
+        """Ungated recall — returns every stored preference as fact."""
+        results = await self._s.search(query, current_only=True)
+        if not results:
             return "No preferences found."
-        rows = await self._m.query.cypher(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.id IN $ids RETURN p.preference AS preference",
-            params={"ids": [str(p.id) for p in prefs], "uid": self._user_id},
-        )
-        if not rows:
-            return "No preferences found."
-        return "\n".join(f"[FACT] {r['preference']}" for r in rows)
+        return "\n".join(f"[FACT] {r['preference']}" for r in results)
 
-    async def backdate(self, preference, days) -> None:
+    async def backdate(self, preference_text, days) -> None:
         """Test helper: simulate age by moving last_confirmed into the past."""
-        hits = await self._m.long_term.search_preferences(
-            query=preference, threshold=0.0, limit=1
-        )
-        if hits:
-            await self._m._client.execute_write(
-                "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference {id:$id}) "
-                "SET p.last_confirmed = datetime() - duration({days:$d})",
-                {"id": str(hits[0].id), "d": days, "uid": self._user_id},
+        results = await self._s.search(preference_text, top_k=1)
+        if results:
+            old_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            await self._s._c.patch_item(
+                item=results[0]["id"],
+                partition_key=self._s._user_id,
+                patch_operations=[
+                    {"op": "set", "path": "/last_confirmed", "value": old_date},
+                ],
             )
 
 
@@ -461,149 +383,66 @@ class BiTemporalRecord:
         )
 
 
-class GraphBeliefStore:
-    """Bi-temporal belief revision on Neo4j Preference nodes (SCD Type 2).
+class CosmosBeliefStore:
+    """Bi-temporal belief revision on Cosmos DB preference documents (SCD Type 2).
 
-    Every preference carries ``valid_from`` / ``valid_to`` timestamps.  When a
-    new value supersedes an old one the old node is *retired* (``valid_to`` set,
-    ``superseded_by`` linked) — never deleted.  This gives full audit history
-    plus time-travel queries, all in Cypher.
+    Every preference carries ``valid_from`` / ``valid_to`` timestamps. When a
+    new value supersedes an old one the old document is *retired* (``valid_to``
+    set, ``superseded_by`` linked) — never deleted. This gives full audit
+    history plus time-travel queries, all via SQL API.
 
-    **User isolation**: all reads and writes are scoped to ``user_id`` via
-    ``(:User {identifier})-[:HAS_PREFERENCE]->(:Preference)`` edges,
-    so multiple users can safely share one Neo4j database.
-
-    Composes with ``GraphPromotionStore``: a revised belief still has a trust
+    Composes with ``CosmosPromotionStore``: a revised belief still has a trust
     ``state`` (candidate / provisional / trusted).
     """
 
-    def __init__(self, memory, user_id: str):
-        self._m = memory
-        self._user_id = user_id
+    def __init__(self, store):
+        self._s = store  # SemanticMemoryStore
 
-    async def reset(self) -> None:
-        """Delete this user's belief-managed preferences so demo re-runs start clean."""
-        await self._m._client.execute_write(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.valid_from IS NOT NULL DETACH DELETE p",
-            {"uid": self._user_id},
-        )
+    async def reset(self) -> int:
+        """Delete this scope's preferences so demo re-runs start clean."""
+        return await self._s.reset()
 
     async def store(self, category: str, preference: str,
                     source_type: str = "user_assertion") -> dict:
-        """Store a new belief.  If an existing current belief in the same
-        category contradicts it, supersede the old one (SCD Type 2)."""
-        # Check for existing current belief in this category (scoped to user)
-        existing = await self._m.query.cypher(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.category = $cat AND p.valid_to IS NULL "
-            "  AND p.valid_from IS NOT NULL "
-            "RETURN p.id AS id, p.preference AS preference",
-            params={"cat": category, "uid": self._user_id},
-        )
-        # Supersede if there's a conflicting current value
-        if existing and existing[0]["preference"].lower() != preference.lower():
-            # REMOVE p.embedding so the SDK's dedup (cosine ≥ 0.95 in same
-            # category) won't match the superseded node when we create the
-            # replacement.  Without this, "home_city: New York" and
-            # "home_city: Paris" can score above the threshold and the SDK
-            # returns the OLD node instead of creating a new one.
-            await self._m._client.execute_write(
-                "MATCH (p:Preference {id:$id}) "
-                "SET p.valid_to = datetime(), p.superseded_by = $new_pref "
-                "REMOVE p.embedding",
-                {"id": existing[0]["id"], "new_pref": preference},
-            )
-
-        # Write new preference with temporal properties
-        pref = await self._m.long_term.add_preference(
-            category=category, preference=preference, confidence=0.8,
-            user_identifier=self._user_id,
-        )
-        state = "provisional" if source_type == "user_assertion" else "candidate"
-        await self._m._client.execute_write(
-            """MATCH (p:Preference {id:$id})
-               SET p.valid_from = datetime(), p.valid_to = null,
-                   p.source_type = $src, p.state = $state,
-                   p.category = $cat, p.confirmation_count = 0,
-                   p.first_seen = datetime(), p.last_confirmed = datetime()""",
-            {"id": str(pref.id), "src": source_type, "state": state, "cat": category},
-        )
-        return {"preference": preference, "state": state,
-                "superseded": existing[0]["preference"] if existing else None}
+        """Store a new belief. Auto-supersedes conflicting current value (SCD Type 2)."""
+        existing = await self._s.get_current(category)
+        doc = await self._s.add_preference(category, preference, 0.8, source_type)
+        return {"preference": preference, "state": doc["state"],
+                "superseded": existing["preference"] if existing and existing["preference"].lower() != preference.lower() else None}
 
     async def recall_current(self, query: str) -> str:
-        """Recall only currently-valid beliefs (valid_to IS NULL, state trusted/provisional).
-        Scoped to this user's preferences (user isolation)."""
-        prefs = await self._m.long_term.search_preferences(
-            query=query, threshold=0.0)
-        if not prefs:
-            return "No preferences found."
-        rows = await self._m.query.cypher(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.id IN $ids "
-            "AND p.valid_to IS NULL AND p.state IN ['trusted','provisional'] "
-            "RETURN p.preference AS preference, p.state AS state, p.category AS category",
-            params={"ids": [str(p.id) for p in prefs], "uid": self._user_id},
-        )
-        if not rows:
+        """Recall currently-valid beliefs (state trusted/provisional)."""
+        results = await self._s.search(query, states=["trusted", "provisional"])
+        if not results:
             return "No current beliefs found."
-        out = []
-        for r in rows:
-            tag = "[KNOWN]" if r["state"] == "trusted" else "[LIKELY]"
-            out.append(f"{tag} {r['preference']}")
-        return "\n".join(out)
+        return "\n".join(
+            f"{'[KNOWN]' if r['state'] == 'trusted' else '[LIKELY]'} {r['preference']}"
+            for r in results
+        )
 
     async def recall_at_time(self, query: str, iso_date: str) -> str:
-        """Recall beliefs that were valid at a specific date (time-travel query).
-        Scoped to this user's preferences (user isolation)."""
-        prefs = await self._m.long_term.search_preferences(
-            query=query, threshold=0.0)
-        if not prefs:
-            return "No preferences found."
-        rows = await self._m.query.cypher(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.id IN $ids "
-            "AND p.valid_from <= datetime($dt) "
-            "AND (p.valid_to IS NULL OR p.valid_to > datetime($dt)) "
-            "RETURN p.preference AS preference, p.category AS cat, "
-            "       toString(p.valid_from) AS vf, toString(p.valid_to) AS vt",
-            params={"ids": [str(p.id) for p in prefs], "dt": iso_date, "uid": self._user_id},
-        )
-        if not rows:
+        """Time-travel: recall beliefs valid on a specific date."""
+        results = await self._s.search(query, current_only=False, top_k=20)
+        valid = []
+        for r in results:
+            vf = r.get("valid_from", "")
+            vt = r.get("valid_to")
+            if vf <= iso_date and (vt is None or vt > iso_date):
+                valid.append(r)
+        if not valid:
             return f"No beliefs found valid at {iso_date}."
         return "\n".join(
-            f"{r['preference']} (valid {r['vf'][:10]} → {r['vt'][:10] if r['vt'] else 'present'})"
-            for r in rows
+            f"{r['preference']} (valid {r['valid_from'][:10]} → {r['valid_to'][:10] if r['valid_to'] else 'present'})"
+            for r in valid
         )
 
     async def history(self, category: str) -> list[dict]:
-        """Full evolution of a belief category (SCD Type 2 audit trail).
-        Scoped to this user (user isolation)."""
-        return await self._m.query.cypher(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.category = $cat "
-            "AND p.valid_from IS NOT NULL "
-            "RETURN p.preference AS preference, p.state AS state, "
-            "       toString(p.valid_from) AS valid_from, "
-            "       toString(p.valid_to) AS valid_to, "
-            "       p.superseded_by AS superseded_by "
-            "ORDER BY p.valid_from",
-            params={"cat": category, "uid": self._user_id},
-        )
+        """Full SCD Type 2 audit trail for a category."""
+        return await self._s.history(category)
 
     async def snapshot(self) -> list[dict]:
-        """Read this user's belief-managed preferences from Neo4j."""
-        return await self._m.query.cypher(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.valid_from IS NOT NULL "
-            "RETURN p.preference AS preference, p.state AS state, "
-            "       p.category AS category, "
-            "       toString(p.valid_from) AS valid_from, "
-            "       toString(p.valid_to) AS valid_to "
-            "ORDER BY p.valid_from",
-            params={"uid": self._user_id},
-        )
+        """Read this user's belief-managed preferences."""
+        return await self._s.snapshot(include_deprecated=False)
 
 
 # ---------------------------------------------------------------------------
@@ -688,146 +527,114 @@ class RetentionScorer:
 
 
 # ---------------------------------------------------------------------------
-# Graph-Backed Retention (Neo4j)
+# Cosmos-Backed Retention
 # ---------------------------------------------------------------------------
 
-class GraphRetentionStore:
-    """Bounded retention scoring on Neo4j preference nodes.
+class CosmosRetentionStore:
+    """Bounded retention scoring on Cosmos DB preference documents.
 
-    Reads all lifecycle-managed preferences (those with ``state IS NOT NULL``),
-    scores them using ``RetentionScorer``, writes scores back, and evicts the
-    lowest-scored by setting their state to DEPRECATED.
-
-    Composes with ``GraphPromotionStore`` and ``GraphBeliefStore``: retention
-    never touches ``valid_from``/``valid_to`` or ``confirmation_count``.  It only
-    reads existing properties to compute scores and writes ``retention_score``,
-    ``last_scored``, and ``state`` (on eviction).
-
-    **User isolation**: all operations scoped to ``user_id``.
+    Reads all lifecycle-managed preferences, scores them using
+    ``RetentionScorer``, writes scores back via partial updates, and evicts
+    the lowest-scored by setting their state to DEPRECATED.
     """
 
-    def __init__(self, memory, user_id: str, scorer: RetentionScorer = None,
+    def __init__(self, store, scorer: RetentionScorer = None,
                  capacity: int = 50):
-        self._m = memory
-        self._user_id = user_id
+        self._s = store  # SemanticMemoryStore
         self.scorer = scorer or RetentionScorer(capacity=capacity)
         self.capacity = capacity
 
-    async def reset(self) -> None:
-        """Remove retention metadata so demo re-runs start clean."""
-        await self._m._client.execute_write(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "REMOVE p.retention_score, p.last_scored",
-            {"uid": self._user_id},
-        )
+    async def reset(self) -> int:
+        """Delete scoped demo preferences so re-runs start clean."""
+        return await self._s.reset()
+
+    async def cleanup_scope(self) -> int:
+        """Delete only this scope's demo preferences."""
+        return await self._s.reset()
 
     async def add_preference(self, category: str, preference: str,
                              state: str = "candidate", access_count: int = 0,
                              success_correlation: float = 0.0,
-                             age_days: int = 0) -> None:
+                             age_days: int = 0) -> str:
         """Helper: add a preference with retention-relevant metadata for demos."""
-        pref = await self._m.long_term.add_preference(
-            category=category, preference=preference,
-            confidence=0.7, user_identifier=self._user_id,
+        doc = await self._s.add_preference(category, preference, 0.7,
+                                           "llm_inference", state)
+        # Backdate and set retention-specific fields
+        first_seen = (datetime.now(timezone.utc) - timedelta(days=age_days)).isoformat()
+        last_accessed = (datetime.now(timezone.utc) - timedelta(
+            days=int(age_days * 0.3))).isoformat() if access_count > 0 else None
+        ops = [
+            {"op": "set", "path": "/first_seen", "value": first_seen},
+            {"op": "set", "path": "/access_count", "value": access_count},
+            {"op": "set", "path": "/success_correlation", "value": success_correlation},
+        ]
+        if last_accessed:
+            ops.append({"op": "set", "path": "/last_accessed", "value": last_accessed})
+        await self._s._c.patch_item(
+            item=doc["id"], partition_key=self._s._user_id,
+            patch_operations=ops,
         )
-        await self._m._client.execute_write(
-            """MATCH (p:Preference {id:$id})
-               SET p.state = $state,
-                   p.access_count = $ac,
-                   p.success_correlation = $sc,
-                   p.first_seen = datetime() - duration({days:$age}),
-                   p.last_accessed = CASE WHEN $ac > 0
-                       THEN datetime() - duration({days: toInteger($age * 0.3)})
-                       ELSE null END,
-                   p.category = $cat""",
-            {"id": str(pref.id), "state": state, "ac": access_count,
-             "sc": success_correlation, "age": age_days, "cat": category},
-        )
+        return doc["id"]
 
     async def score_all(self) -> list[dict]:
-        """Score all lifecycle-managed preferences and write scores back.
-        Returns list of {preference, score, state} sorted ascending (evict-first)."""
-        rows = await self._m.query.cypher(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.state IS NOT NULL AND p.state <> 'deprecated' "
-            "RETURN p.id AS id, p.preference AS preference, p.state AS state, "
-            "       p.access_count AS access_count, "
-            "       p.success_correlation AS success_correlation, "
-            "       p.first_seen AS first_seen, p.last_accessed AS last_accessed, "
-            "       p.confirmation_count AS confirmation_count, "
-            "       coalesce(size(p.preference), 0) AS content_length",
-            params={"uid": self._user_id},
-        )
+        """Score all active preferences. Returns list sorted ascending (evict-first)."""
+        docs = await self._s.snapshot(include_deprecated=False)
         scored = []
-        for r in rows:
-            # Build a MemoryItem-like object for the scorer
+        for d in docs:
+            if d.get("state") == "deprecated" or d.get("valid_to") is not None:
+                continue
             m = MemoryItem(
-                id=r["id"], content=r["preference"] or "",
-                state=MemoryState(r["state"]) if r["state"] else MemoryState.CANDIDATE,
-                access_count=r.get("access_count") or 0,
-                success_correlation=r.get("success_correlation") or 0.0,
-                first_seen=self._parse_neo4j_dt(r.get("first_seen")),
-                last_accessed=self._parse_neo4j_dt(r.get("last_accessed")),
-                confirmation_count=r.get("confirmation_count") or 0,
+                id=d["id"], content=d.get("preference", ""),
+                state=MemoryState(d["state"]) if d.get("state") else MemoryState.CANDIDATE,
+                access_count=d.get("access_count", 0) or 0,
+                success_correlation=d.get("success_correlation", 0.0) or 0.0,
+                first_seen=self._parse_dt(d.get("first_seen")),
+                last_accessed=self._parse_dt(d.get("last_accessed")),
+                confirmation_count=d.get("confirmation_count", 0) or 0,
             )
             score = self.scorer.score(m)
-            scored.append({"id": r["id"], "preference": r["preference"],
-                           "state": r["state"], "score": score})
-        # Write scores back to Neo4j
-        for item in scored:
-            await self._m._client.execute_write(
-                "MATCH (p:Preference {id:$id}) "
-                "SET p.retention_score = $score, p.last_scored = datetime()",
-                {"id": item["id"], "score": item["score"]},
+            scored.append({"id": d["id"], "preference": d["preference"],
+                           "state": d["state"], "score": score})
+            # Write score back
+            await self._s._c.patch_item(
+                item=d["id"], partition_key=self._s._user_id,
+                patch_operations=[
+                    {"op": "set", "path": "/retention_score", "value": score},
+                    {"op": "set", "path": "/last_scored",
+                     "value": datetime.now(timezone.utc).isoformat()},
+                ],
             )
         scored.sort(key=lambda x: x["score"])
         return scored
 
     async def evict(self, count: int) -> list[dict]:
-        """Deprecate the N lowest-scored preferences. Returns evicted items."""
+        """Deprecate the N lowest-scored preferences."""
         scored = await self.score_all()
         to_evict = scored[:count]
         for item in to_evict:
-            await self._m._client.execute_write(
-                "MATCH (p:Preference {id:$id}) "
-                "SET p.state = 'deprecated', p.evicted_at = datetime()",
-                {"id": item["id"]},
-            )
+            await self._s.set_state(item["id"], "deprecated")
             item["state"] = "deprecated"
         return to_evict
 
     async def snapshot(self) -> list[dict]:
-        """All preferences with their retention scores (for display)."""
-        return await self._m.query.cypher(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.state IS NOT NULL "
-            "RETURN p.preference AS preference, p.state AS state, "
-            "       p.retention_score AS score, p.access_count AS access_count, "
-            "       p.success_correlation AS success_correlation "
-            "ORDER BY coalesce(p.retention_score, 0) DESC",
-            params={"uid": self._user_id},
-        )
+        """All preferences with their retention scores."""
+        docs = await self._s.snapshot(include_deprecated=True)
+        return [{"preference": d["preference"], "state": d["state"],
+                 "score": d.get("retention_score", 0),
+                 "access_count": d.get("access_count", 0),
+                 "success_correlation": d.get("success_correlation", 0)}
+                for d in docs]
 
     async def active_count(self) -> int:
-        """Count of non-deprecated, non-deleted preferences."""
-        rows = await self._m.query.cypher(
-            "MATCH (:User {identifier:$uid})-[:HAS_PREFERENCE]->(p:Preference) "
-            "WHERE p.state IS NOT NULL AND p.state IN ['candidate','provisional','trusted'] "
-            "RETURN count(p) AS n",
-            params={"uid": self._user_id},
-        )
-        return rows[0]["n"] if rows else 0
+        """Count of non-deprecated, non-deleted, current preferences."""
+        return await self._s.count(current_only=True)
 
     @staticmethod
-    def _parse_neo4j_dt(val) -> datetime:
-        """Parse Neo4j datetime or return a default."""
+    def _parse_dt(val) -> datetime:
         if val is None:
             return datetime.now(timezone.utc) - timedelta(days=90)
         if isinstance(val, str):
             return datetime.fromisoformat(val.replace("Z", "+00:00"))
-        # neo4j DateTime objects
-        if hasattr(val, "to_native"):
-            return val.to_native().replace(tzinfo=timezone.utc)
         return datetime.now(timezone.utc)
 
 

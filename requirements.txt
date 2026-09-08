@@ -13,11 +13,12 @@ agent-framework-azure-cosmos
 # Azure Authentication
 azure-identity
 
-# Storage (uncomment as needed per module)
-# azure-cosmos
-neo4j-agent-memory[openai]
+# Storage
+azure-cosmos
 azure-search-documents
 # redis
 
 # Utilities
 pydantic
+openai
+certifi

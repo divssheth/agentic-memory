@@ -25,9 +25,11 @@ can answer *"may I use this?"* and *"which value is current?"*, but the agent
 cannot reliably answer *"why do you believe this?"* or choose language that
 reflects the strength of the evidence.
 
-Module 04 solves that specific gap. It preserves provenance and confidence
-through recall, exposes an explanation tool, and teaches the agent to assert,
-hedge, or ask without changing the lifecycle rules from Module 03.
+Module 04 solves that specific gap by enriching the existing Module 03 nodes
+with evidence metadata. It does not create a parallel set of memories. It
+preserves provenance and confidence through recall, exposes an explanation
+tool, and teaches the agent to assert, hedge, or ask without changing the
+lifecycle rules from Module 03.
 
 Maps to: FR-006 (Confidence Scoring), FR-013 (Audit Trail), FR-014 (Memory
 Provenance).
@@ -68,7 +70,7 @@ rejecting a memory and gives developers an auditable path for debugging it.
 
 ---
 
-## Separation from Module 03
+## Built Directly on Module 03
 
 Module 04 has its own focused utility:
 
@@ -79,21 +81,21 @@ Module 04 has its own focused utility:
 
 This follows Module 03's primary-object-per-concept pattern
 (`GraphPromotionStore`, `GraphBeliefStore`, `GraphRetentionStore`) without
-adding provenance APIs to those teaching objects. `GraphProvenanceStore` reuses
-the same Neo4j `Preference` schema and lifecycle semantics, but does not import
-or modify Module 03's Python classes.
+adding provenance APIs to those teaching objects. `GraphProvenanceStore` reads
+the same Neo4j `Preference` nodes, attaches evidence metadata to them, and
+preserves their lifecycle state, confidence, and temporal history.
 
 ### `GraphProvenanceStore` operations
 
 | Method | Purpose |
 |---|---|
-| `store()` | Persist a belief together with source, evidence, creator, confidence, and timestamps |
-| `confirm()` | Advance the established Module 03 trust state for the demo |
+| `prerequisite_count()` | Verify that Module 03 lifecycle memories exist |
+| `enrich()` | Attach source evidence and creator metadata to an existing current memory |
 | `recall_baseline()` | Reproduce Module 03's state-tagged but provenance-lossy projection |
 | `recall_with_confidence()` | Return visible beliefs with structured provenance and presentation strategy |
 | `explain()` | Return the current belief's origin, evidence, validation, and compact lineage |
-| `snapshot()` | Inspect persisted records during the notebook |
-| `reset()` | Remove only the selected user's Module 04 demo records |
+| `snapshot()` | Inspect the existing lifecycle records during the notebook |
+| `clear_provenance()` | Remove only enrichment properties without deleting memories |
 
 ---
 
@@ -110,14 +112,14 @@ Extend the existing travel agent with two capabilities:
 
 ### Problem-First Flow
 
-1. Recreate the output boundary left by Module 03 with `recall_baseline()`.
-2. Show two visible beliefs whose very different evidence collapses to the same
-   broad state-level output.
-3. Ask why the agent believes one of them and show that the recall result does
-   not contain enough information to answer safely.
+1. Verify that Module 03 lifecycle memories exist for the selected user.
+2. Reproduce Module 03's output boundary with `recall_baseline()` over those
+   existing nodes.
+3. Ask why the agent believes one of them and show that the projection does not
+   contain enough information to answer safely.
 4. Explain provenance and distinguish it from confidence, history, and trust.
-5. Introduce structured recall and `explain_belief`.
-6. Replay the scenario and show evidence-backed, confidence-aware responses.
+5. Enrich the same nodes with the evidence from the Module 03 interactions.
+6. Recall and explain those nodes through a structured, confidence-aware view.
 
 ### State Before Confidence
 
@@ -136,24 +138,21 @@ Confidence never bypasses the lifecycle gate established in Module 03:
 
 | Tool | Purpose |
 |---|---|
-| `remember_belief` | Store the value and the evidence that caused it |
-| `confirm_belief` | Record a later user confirmation |
 | `recall_beliefs` | Return visible beliefs with assert/hedge/ask annotations |
 | `explain_belief` | Format only persisted origin, evidence, timestamps, confidence, confirmation, and lineage |
 
 ### Continuation Demo
 
-1. A direct Marriott statement is high confidence but begins `provisional`, so
-   it is hedged according to Module 3.3's anti-spoofing rule.
-2. A later reaffirmation promotes Marriott to `trusted`, allowing an assertion.
-3. A morning-flight pattern is stored as a medium-confidence inference with
-   concrete evidence. It begins as `candidate` and remains hidden.
-4. After confirmation it becomes `provisional`, so it is visible but hedged.
-5. A low-confidence visible belief causes a clarification question.
-6. "Why?" questions produce different explanations for direct statements and
-   inferred patterns.
-7. A revised value displays compact lineage, reusing Module 3.4 without
-   reteaching SCD Type 2.
+1. Module 03's hotel and home-city memories are recalled without provenance.
+2. `enrich()` attaches the known statements from the earlier notebook to those
+   same nodes.
+3. An invariant check proves the preference count did not change.
+4. Structured recall applies assert/hedge/ask using the existing state and
+   confidence values.
+5. "Why?" questions use only the attached evidence.
+6. A memory without attached evidence remains explicitly unexplained.
+7. The home-city explanation reuses Module 3.4's revision lineage without
+   creating another revision.
 
 ---
 
@@ -162,6 +161,8 @@ Confidence never bypasses the lifecycle gate established in Module 03:
 - Module 3.3 for staged trust and visibility semantics
 - Module 3.4 for current values and temporal lineage
 - The same Neo4j and Foundry configuration used in Module 03
+- Module 03 must be executed first; the notebook fails fast if no lifecycle
+   memories exist for the selected user
 
 ## Outputs for Later Modules
 
