@@ -24,10 +24,22 @@ policies = json.loads((_DATA_DIR / "travel_policies.json").read_text(encoding="u
 # ---------------------------------------------------------------------------
 
 
+CITY_TO_CODES = {
+    "new york": "JFK", "nyc": "JFK", "jfk": "JFK",
+    "london": "LHR", "heathrow": "LHR", "lhr": "LHR",
+    "tokyo": "NRT", "narita": "NRT", "nrt": "NRT",
+    "seattle": "SEA", "sea": "SEA",
+    "san francisco": "SFO", "sf": "SFO", "sfo": "SFO",
+}
+
+
 @tool
 async def search_flights(destination: str) -> str:
-    """Search available flights to a destination city."""
-    results = [f for f in flights if destination.lower() in f["destination"].lower()]
+    """Search available flights to a destination city or airport code."""
+    key = destination.lower().strip()
+    code = CITY_TO_CODES.get(key, key.upper())
+    results = [f for f in flights if f["destination"].upper() == code
+               or destination.lower() in f.get("destination", "").lower()]
     if not results:
         return f"No flights found to {destination}"
     return json.dumps(results[:3], indent=2)

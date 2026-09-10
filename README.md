@@ -11,7 +11,7 @@ Every notebook follows a **problem-first** structure: demonstrate a failure → 
 | **01 Foundations** | `01_foundations/` | 1 | ✅ Complete | Stateless vs stateful agents; session memory basics |
 | **02 Memory Layers** | `02_memory_layers/` | 4 | ✅ Complete | Chat history (Cosmos), episodic (Cosmos), semantic (Neo4j), procedural (SkillsProvider) |
 | **03 Memory Lifecycle** | `03_memory_lifecycle/` | 7 | ✅ Complete | Memory vs RAG, identification, staged promotion (Neo4j), belief revision (SCD Type 2), retention, episodic + procedural lifecycle |
-| **04 Provenance & Confidence** | `04_provenance_and_audit/` | 1 | 📋 Planned | `explain_belief` tool + confidence-aware recall (assert / hedge / ask) |
+| **04 Provenance & Confidence** | `04_provenance_and_audit/` | 1 | 🧪 Ready to test | `explain_belief` tool + confidence-aware recall (assert / hedge / ask) |
 | **05 Retention & Routing** | `05_retrieval/` | 2 | 📋 Planned | Bounded memory with eviction scoring; multi-store agent (LLM-as-router) |
 | **06 Governance & User Control** | `06_governance/` | 2 | 📋 Planned | User inspect/correct/delete tools; role-based memory scoping via middleware |
 | **07 Security** | `07_security/` | 2 | 📋 Planned | Memory poisoning attacks (3 channels); defense-in-depth (origin ceiling + Sybil resistance) |

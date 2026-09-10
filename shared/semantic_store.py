@@ -1,0 +1,387 @@
+"""Cosmos DB-backed semantic memory store with vector search.
+
+Stores preferences as documents with embeddings. Supports lifecycle
+properties (state, confidence, confirmation_count), SCD Type 2
+supersession (valid_from / valid_to), and provenance (source_detail,
+created_by). Used by Modules 2–4 and beyond.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
+
+from azure.cosmos.aio import CosmosClient, ContainerProxy
+
+# Vector search requires Cosmos DB for NoSQL with DiskANN indexing.
+import os
+
+# Container must be created with the vector embedding policy and
+# composite indexes defined in create_container().
+
+CONTAINER_ID = os.environ.get("COSMOS_SEMANTIC_CONTAINER", "semantic-memory")
+DB_ID = os.environ.get("COSMOS_DATABASE", "travel-memory")
+
+# ---------------------------------------------------------------------------
+# Container setup
+# ---------------------------------------------------------------------------
+
+async def create_container(cosmos: CosmosClient) -> ContainerProxy:
+    """Create (or open) the semantic-memory container with vector index."""
+    from azure.cosmos import PartitionKey
+
+    db = await cosmos.create_database_if_not_exists(DB_ID)
+    container = await db.create_container_if_not_exists(
+        id=CONTAINER_ID,
+        partition_key=PartitionKey(path="/user_id"),
+        indexing_policy={
+            "automatic": True,
+            "includedPaths": [{"path": "/*"}],
+            "excludedPaths": [{"path": "/embedding/*"}],
+            "vectorIndexes": [{"path": "/embedding", "type": "diskANN"}],
+        },
+        vector_embedding_policy={
+            "vectorEmbeddings": [{
+                "path": "/embedding",
+                "dataType": "float32",
+                "distanceFunction": "cosine",
+                "dimensions": 1536,
+            }]
+        },
+    )
+    return container
+
+
+# ---------------------------------------------------------------------------
+# Semantic Memory Store
+# ---------------------------------------------------------------------------
+
+class SemanticMemoryStore:
+    """CRUD + vector search over preference documents in Cosmos DB.
+
+    Every preference is a document with lifecycle properties that later
+    modules (promotion, belief revision, retention, provenance) can
+    update via partial patches.
+    """
+
+    def __init__(self, container: ContainerProxy, user_id: str,
+                 embed_fn=None, scope_tag: str | None = None):
+        self._c = container
+        self._user_id = user_id
+        self._embed = embed_fn  # async (text) -> list[float]
+        self.scope_tag = scope_tag
+
+    # ----- write -----
+
+    # Similarity threshold: above this, two preferences in the same
+    # category are considered competing (supersede). Below it, they coexist.
+    SUPERSEDE_THRESHOLD = 0.85
+
+    async def add_preference(
+        self,
+        category: str,
+        preference: str,
+        confidence: float = 0.8,
+        source_type: str = "user_assertion",
+        state: str | None = None,
+    ) -> dict:
+        """Store a preference. If a semantically similar current value exists
+        in the same category, supersede it (SCD Type 2). Dissimilar values
+        in the same category coexist."""
+        if state is None:
+            state = "provisional" if source_type == "user_assertion" else "candidate"
+
+        embedding = await self._embed(preference) if self._embed else []
+
+        # Find the most similar current preference in this category
+        similar = await self._find_similar_in_category(category, embedding)
+        if similar:
+            if similar["preference"].lower() == preference.lower():
+                return similar  # identical text — no-op
+            # Semantically similar but different text → supersede
+            await self._c.patch_item(
+                item=similar["id"],
+                partition_key=self._user_id,
+                patch_operations=[
+                    {"op": "set", "path": "/valid_to",
+                     "value": datetime.now(timezone.utc).isoformat()},
+                    {"op": "set", "path": "/superseded_by", "value": preference},
+                ],
+            )
+        now = datetime.now(timezone.utc).isoformat()
+
+        doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": self._user_id,
+            "category": category,
+            "preference": preference,
+            "confidence": confidence,
+            "state": state,
+            "source_type": source_type,
+            "valid_from": now,
+            "valid_to": None,
+            "superseded_by": None,
+            "confirmation_count": 0,
+            "first_seen": now,
+            "last_confirmed": now if source_type == "user_assertion" else None,
+            "source_detail": None,
+            "created_by": None,
+            "scope_tag": self.scope_tag,
+            "embedding": embedding,
+        }
+        await self._c.upsert_item(doc)
+        return doc
+
+    # ----- read -----
+
+    async def search(self, query: str, *, top_k: int = 10,
+                     current_only: bool = True,
+                     states: list[str] | None = None,
+                     track_access: bool = True) -> list[dict]:
+        """Vector similarity search over preferences.
+        When track_access is True, increments access_count and last_accessed
+        on every returned document so the retention scorer has real signals."""
+        if not self._embed:
+            raise RuntimeError("No embedding function provided")
+        qv = await self._embed(query)
+        where = ["c.user_id = @uid"]
+        params = [{"name": "@uid", "value": self._user_id}]
+
+        if current_only:
+            where.append("IS_NULL(c.valid_to)")
+        if states:
+            placeholders = ", ".join(f"@s{i}" for i in range(len(states)))
+            where.append(f"c.state IN ({placeholders})")
+            for i, s in enumerate(states):
+                params.append({"name": f"@s{i}", "value": s})
+        if self.scope_tag:
+            where.append("c.scope_tag = @scope")
+            params.append({"name": "@scope", "value": self.scope_tag})
+
+        sql = (
+            "SELECT TOP @topK c.id, c.category, c.preference, c.confidence, "
+            "c.state, c.source_type, c.source_detail, c.created_by, "
+            "c.first_seen, c.last_confirmed, c.confirmation_count, "
+            "c.valid_from, c.valid_to, c.superseded_by, "
+            "VectorDistance(c.embedding, @qv) AS score "
+            f"FROM c WHERE {' AND '.join(where)} "
+            "ORDER BY VectorDistance(c.embedding, @qv)"
+        )
+        params.append({"name": "@topK", "value": top_k})
+        params.append({"name": "@qv", "value": qv})
+
+        results = [item async for item in self._c.query_items(
+            sql, parameters=params, partition_key=self._user_id,
+        )]
+
+        if track_access and results:
+            now = datetime.now(timezone.utc).isoformat()
+            for item in results:
+                if "id" in item:
+                    await self._c.patch_item(
+                        item=item["id"],
+                        partition_key=self._user_id,
+                        patch_operations=[
+                            {"op": "incr", "path": "/access_count", "value": 1},
+                            {"op": "set", "path": "/last_accessed", "value": now},
+                        ],
+                    )
+
+        return results
+
+    async def get_current(self, category: str) -> dict | None:
+        """Return the current (non-superseded) preference in a category."""
+        return await self._current_in_category(category)
+
+    async def history(self, category: str) -> list[dict]:
+        """Full SCD Type 2 audit trail for a category."""
+        sql = (
+            "SELECT c.id, c.preference, c.state, c.source_type, "
+            "c.source_detail, c.valid_from, c.valid_to, c.superseded_by, "
+            "c.confidence, c.confirmation_count "
+            "FROM c WHERE c.user_id = @uid AND c.category = @cat "
+            "ORDER BY c.valid_from"
+        )
+        params = [
+            {"name": "@uid", "value": self._user_id},
+            {"name": "@cat", "value": category},
+        ]
+        return [item async for item in self._c.query_items(
+            sql, parameters=params, partition_key=self._user_id,
+        )]
+
+    async def snapshot(self, *, include_deprecated: bool = False) -> list[dict]:
+        """All preferences for this user."""
+        where = "c.user_id = @uid"
+        params = [{"name": "@uid", "value": self._user_id}]
+        if not include_deprecated:
+            where += " AND (NOT IS_DEFINED(c.state) OR c.state != 'deprecated')"
+        if self.scope_tag:
+            where += " AND c.scope_tag = @scope"
+            params.append({"name": "@scope", "value": self.scope_tag})
+
+        sql = (
+            "SELECT c.id, c.category, c.preference, c.state, c.confidence, "
+            "c.source_type, c.source_detail, c.created_by, "
+            "c.confirmation_count, c.first_seen, c.valid_from, c.valid_to, "
+            "c.superseded_by, c.retention_score, c.access_count, "
+            "c.success_correlation "
+            f"FROM c WHERE {where} ORDER BY c.valid_from"
+        )
+        return [item async for item in self._c.query_items(
+            sql, parameters=params, partition_key=self._user_id,
+        )]
+
+    async def count(self, *, current_only: bool = True) -> int:
+        """Count preferences."""
+        where = "c.user_id = @uid"
+        params = [{"name": "@uid", "value": self._user_id}]
+        if current_only:
+            where += " AND IS_NULL(c.valid_to) AND (NOT IS_DEFINED(c.state) OR c.state != 'deprecated')"
+        if self.scope_tag:
+            where += " AND c.scope_tag = @scope"
+            params.append({"name": "@scope", "value": self.scope_tag})
+
+        sql = f"SELECT VALUE COUNT(1) FROM c WHERE {where}"
+        rows = [r async for r in self._c.query_items(
+            sql, parameters=params, partition_key=self._user_id,
+        )]
+        return rows[0] if rows else 0
+
+    # ----- lifecycle updates (used by Modules 3-4) -----
+
+    async def confirm(self, preference_text: str) -> dict | None:
+        """Increment confirmation_count and advance state."""
+        matches = await self.search(preference_text, top_k=1,
+                                    current_only=True)
+        if not matches:
+            return None
+        doc = matches[0]
+        new_count = (doc.get("confirmation_count") or 0) + 1
+        src = doc.get("source_type", "")
+        old_state = doc.get("state", "candidate")
+
+        if src == "user_assertion" and new_count >= 1:
+            new_state = "trusted"
+        elif new_count >= 2:
+            new_state = "trusted"
+        elif new_count >= 1:
+            new_state = "provisional"
+        else:
+            new_state = old_state
+
+        await self._c.patch_item(
+            item=doc["id"],
+            partition_key=self._user_id,
+            patch_operations=[
+                {"op": "set", "path": "/confirmation_count", "value": new_count},
+                {"op": "set", "path": "/last_confirmed",
+                 "value": datetime.now(timezone.utc).isoformat()},
+                {"op": "set", "path": "/state", "value": new_state},
+            ],
+        )
+        return {"preference": doc["preference"], "state": new_state,
+                "confirmations": new_count}
+
+    async def enrich(self, category: str, source_detail: str,
+                     created_by: str = "TravelAssistant") -> dict | None:
+        """Attach provenance evidence to an existing preference."""
+        doc = await self._current_in_category(category)
+        if not doc:
+            return None
+        await self._c.patch_item(
+            item=doc["id"],
+            partition_key=self._user_id,
+            patch_operations=[
+                {"op": "set", "path": "/source_detail", "value": source_detail},
+                {"op": "set", "path": "/created_by", "value": created_by},
+            ],
+        )
+        doc["source_detail"] = source_detail
+        doc["created_by"] = created_by
+        return doc
+
+    async def set_state(self, doc_id: str, state: str) -> None:
+        """Update the lifecycle state of a preference."""
+        await self._c.patch_item(
+            item=doc_id,
+            partition_key=self._user_id,
+            patch_operations=[
+                {"op": "set", "path": "/state", "value": state},
+            ],
+        )
+
+    # ----- reset -----
+
+    async def reset(self) -> int:
+        """Delete this user's preferences (scoped by scope_tag if set)."""
+        where = "c.user_id = @uid"
+        params = [{"name": "@uid", "value": self._user_id}]
+        if self.scope_tag:
+            where += " AND c.scope_tag = @scope"
+            params.append({"name": "@scope", "value": self.scope_tag})
+
+        sql = f"SELECT c.id FROM c WHERE {where}"
+        ids = [item["id"] async for item in self._c.query_items(
+            sql, parameters=params, partition_key=self._user_id,
+        )]
+        for doc_id in ids:
+            await self._c.delete_item(doc_id, partition_key=self._user_id)
+        return len(ids)
+
+    # ----- internal -----
+
+    async def _find_similar_in_category(
+        self, category: str, embedding: list[float]
+    ) -> dict | None:
+        """Find a current preference in this category whose embedding is
+        above SUPERSEDE_THRESHOLD. Returns the most similar one, or None."""
+        if not embedding:
+            return await self._current_in_category(category)
+        sql = (
+            "SELECT c.id, c.preference, c.category, c.state, c.confidence, "
+            "c.embedding, c.valid_to "
+            "FROM c WHERE c.user_id = @uid AND c.category = @cat "
+            "AND IS_NULL(c.valid_to)"
+        )
+        params = [
+            {"name": "@uid", "value": self._user_id},
+            {"name": "@cat", "value": category},
+        ]
+        items = [item async for item in self._c.query_items(
+            sql, parameters=params, partition_key=self._user_id,
+        )]
+        if not items:
+            return None
+        # Compute cosine similarity against each current item
+        best, best_sim = None, -1.0
+        for item in items:
+            stored_emb = item.get("embedding", [])
+            if not stored_emb:
+                continue
+            dot = sum(a * b for a, b in zip(embedding, stored_emb))
+            norm_a = sum(a * a for a in embedding) ** 0.5
+            norm_b = sum(b * b for b in stored_emb) ** 0.5
+            sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
+            if sim > best_sim:
+                best, best_sim = item, sim
+        if best_sim >= self.SUPERSEDE_THRESHOLD:
+            return best
+        return None
+
+    async def _current_in_category(self, category: str) -> dict | None:
+        sql = (
+            "SELECT * FROM c WHERE c.user_id = @uid "
+            "AND c.category = @cat AND IS_NULL(c.valid_to) "
+            "ORDER BY c.valid_from DESC OFFSET 0 LIMIT 1"
+        )
+        params = [
+            {"name": "@uid", "value": self._user_id},
+            {"name": "@cat", "value": category},
+        ]
+        items = [item async for item in self._c.query_items(
+            sql, parameters=params, partition_key=self._user_id,
+        )]
+        return items[0] if items else None
