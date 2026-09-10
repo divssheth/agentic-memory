@@ -13,13 +13,23 @@ LOCATION="eastus2"
 # Create resource group (skip if you already have one)
 az group create --name $RESOURCE_GROUP --location $LOCATION
 
-# Create Cosmos DB account (NoSQL API)
+# Create Cosmos DB account (NoSQL API) with vector search enabled
 az cosmosdb create \
   --name $COSMOS_ACCOUNT \
   --resource-group $RESOURCE_GROUP \
   --default-consistency-level Session \
-  --locations regionName=$LOCATION failoverPriority=0
+  --locations regionName=$LOCATION failoverPriority=0 \
+  --capabilities EnableNoSQLVectorSearch
 ```
+
+> **Existing account?** If you already have a Cosmos DB account, enable vector search separately:
+> ```bash
+> az cosmosdb update \
+>   --name $COSMOS_ACCOUNT \
+>   --resource-group $RESOURCE_GROUP \
+>   --capabilities EnableNoSQLVectorSearch
+> ```
+> Or in the **Azure Portal**: go to your Cosmos DB account → **Settings** → **Features** → find **Vector Search in Azure Cosmos DB for NoSQL** → click **Enable**. Takes ~1 minute to activate.
 
 ## 2. Get the Endpoint
 
@@ -87,7 +97,18 @@ az cosmosdb sql role assignment create \
   --scope "/"
 ```
 
-## 4. Verify
+## 4. Create the Database
+
+The notebooks create containers automatically, but the **database must exist first**. The `CosmosHistoryProvider` and `SemanticMemoryStore` both expect a database called `travel-memory`:
+
+```bash
+az cosmosdb sql database create \
+  --account-name $COSMOS_ACCOUNT \
+  --resource-group $RESOURCE_GROUP \
+  --name travel-memory
+```
+
+## 5. Verify
 
 ```bash
 # Role assignment should show your user
@@ -98,12 +119,12 @@ az cosmosdb sql role assignment list \
 
 ## What the Notebooks Create Automatically
 
-The notebooks create these resources on first use:
-- **Database**: `travel-memory`
+The notebooks create these containers on first use (the database must already exist — see step 4):
 - **Container**: `chat-history` (partition key: `/session_id`) — used by `CosmosHistoryProvider`
 - **Container**: `episodic-events` (partition key: `/user_id`) — used by the episodic memory notebook
+- **Container**: `semantic-memory` (partition key: `/user_id`, DiskANN vector index) — used by Modules 2–4 for preferences
 
-You don't need to create them manually.
+You don't need to create the containers manually, but the database `travel-memory` must exist.
 
 ## Cost
 

@@ -16,11 +16,13 @@ from typing import Optional
 from azure.cosmos.aio import CosmosClient, ContainerProxy
 
 # Vector search requires Cosmos DB for NoSQL with DiskANN indexing.
+import os
+
 # Container must be created with the vector embedding policy and
 # composite indexes defined in create_container().
 
-CONTAINER_ID = "semantic-memory"
-DB_ID = "travel-memory"
+CONTAINER_ID = os.environ.get("COSMOS_SEMANTIC_CONTAINER", "semantic-memory")
+DB_ID = os.environ.get("COSMOS_DATABASE", "travel-memory")
 
 # ---------------------------------------------------------------------------
 # Container setup
@@ -73,6 +75,10 @@ class SemanticMemoryStore:
 
     # ----- write -----
 
+    # Similarity threshold: above this, two preferences in the same
+    # category are considered competing (supersede). Below it, they coexist.
+    SUPERSEDE_THRESHOLD = 0.85
+
     async def add_preference(
         self,
         category: str,
@@ -81,16 +87,22 @@ class SemanticMemoryStore:
         source_type: str = "user_assertion",
         state: str | None = None,
     ) -> dict:
-        """Store a preference. Auto-supersedes any conflicting current
-        value in the same category (SCD Type 2)."""
+        """Store a preference. If a semantically similar current value exists
+        in the same category, supersede it (SCD Type 2). Dissimilar values
+        in the same category coexist."""
         if state is None:
             state = "provisional" if source_type == "user_assertion" else "candidate"
 
-        # Supersede existing current preference in this category
-        existing = await self._current_in_category(category)
-        if existing and existing["preference"].lower() != preference.lower():
+        embedding = await self._embed(preference) if self._embed else []
+
+        # Find the most similar current preference in this category
+        similar = await self._find_similar_in_category(category, embedding)
+        if similar:
+            if similar["preference"].lower() == preference.lower():
+                return similar  # identical text — no-op
+            # Semantically similar but different text → supersede
             await self._c.patch_item(
-                item=existing["id"],
+                item=similar["id"],
                 partition_key=self._user_id,
                 patch_operations=[
                     {"op": "set", "path": "/valid_to",
@@ -98,8 +110,6 @@ class SemanticMemoryStore:
                     {"op": "set", "path": "/superseded_by", "value": preference},
                 ],
             )
-
-        embedding = await self._embed(preference) if self._embed else []
         now = datetime.now(timezone.utc).isoformat()
 
         doc = {
@@ -128,8 +138,11 @@ class SemanticMemoryStore:
 
     async def search(self, query: str, *, top_k: int = 10,
                      current_only: bool = True,
-                     states: list[str] | None = None) -> list[dict]:
-        """Vector similarity search over preferences."""
+                     states: list[str] | None = None,
+                     track_access: bool = True) -> list[dict]:
+        """Vector similarity search over preferences.
+        When track_access is True, increments access_count and last_accessed
+        on every returned document so the retention scorer has real signals."""
         if not self._embed:
             raise RuntimeError("No embedding function provided")
         qv = await self._embed(query)
@@ -159,9 +172,24 @@ class SemanticMemoryStore:
         params.append({"name": "@topK", "value": top_k})
         params.append({"name": "@qv", "value": qv})
 
-        return [item async for item in self._c.query_items(
+        results = [item async for item in self._c.query_items(
             sql, parameters=params, partition_key=self._user_id,
         )]
+
+        if track_access and results:
+            now = datetime.now(timezone.utc).isoformat()
+            for item in results:
+                if "id" in item:
+                    await self._c.patch_item(
+                        item=item["id"],
+                        partition_key=self._user_id,
+                        patch_operations=[
+                            {"op": "incr", "path": "/access_count", "value": 1},
+                            {"op": "set", "path": "/last_accessed", "value": now},
+                        ],
+                    )
+
+        return results
 
     async def get_current(self, category: str) -> dict | None:
         """Return the current (non-superseded) preference in a category."""
@@ -198,7 +226,8 @@ class SemanticMemoryStore:
             "SELECT c.id, c.category, c.preference, c.state, c.confidence, "
             "c.source_type, c.source_detail, c.created_by, "
             "c.confirmation_count, c.first_seen, c.valid_from, c.valid_to, "
-            "c.superseded_by "
+            "c.superseded_by, c.retention_score, c.access_count, "
+            "c.success_correlation "
             f"FROM c WHERE {where} ORDER BY c.valid_from"
         )
         return [item async for item in self._c.query_items(
@@ -303,6 +332,44 @@ class SemanticMemoryStore:
         return len(ids)
 
     # ----- internal -----
+
+    async def _find_similar_in_category(
+        self, category: str, embedding: list[float]
+    ) -> dict | None:
+        """Find a current preference in this category whose embedding is
+        above SUPERSEDE_THRESHOLD. Returns the most similar one, or None."""
+        if not embedding:
+            return await self._current_in_category(category)
+        sql = (
+            "SELECT c.id, c.preference, c.category, c.state, c.confidence, "
+            "c.embedding, c.valid_to "
+            "FROM c WHERE c.user_id = @uid AND c.category = @cat "
+            "AND IS_NULL(c.valid_to)"
+        )
+        params = [
+            {"name": "@uid", "value": self._user_id},
+            {"name": "@cat", "value": category},
+        ]
+        items = [item async for item in self._c.query_items(
+            sql, parameters=params, partition_key=self._user_id,
+        )]
+        if not items:
+            return None
+        # Compute cosine similarity against each current item
+        best, best_sim = None, -1.0
+        for item in items:
+            stored_emb = item.get("embedding", [])
+            if not stored_emb:
+                continue
+            dot = sum(a * b for a, b in zip(embedding, stored_emb))
+            norm_a = sum(a * a for a in embedding) ** 0.5
+            norm_b = sum(b * b for b in stored_emb) ** 0.5
+            sim = dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
+            if sim > best_sim:
+                best, best_sim = item, sim
+        if best_sim >= self.SUPERSEDE_THRESHOLD:
+            return best
+        return None
 
     async def _current_in_category(self, category: str) -> dict | None:
         sql = (

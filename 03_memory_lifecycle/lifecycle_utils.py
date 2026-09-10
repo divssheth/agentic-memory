@@ -620,9 +620,9 @@ class CosmosRetentionStore:
         """All preferences with their retention scores."""
         docs = await self._s.snapshot(include_deprecated=True)
         return [{"preference": d["preference"], "state": d["state"],
-                 "score": d.get("retention_score", 0),
-                 "access_count": d.get("access_count", 0),
-                 "success_correlation": d.get("success_correlation", 0)}
+                 "score": d.get("retention_score") or 0,
+                 "access_count": d.get("access_count") or 0,
+                 "success_correlation": d.get("success_correlation") or 0}
                 for d in docs]
 
     async def active_count(self) -> int:
@@ -779,7 +779,7 @@ def create_baseline_agent(
     client,
     credential,
     *,
-    cosmos_container=None,
+    semantic_store=None,
     search_client=None,
     openai_client=None,
     embedding_model: str = "text-embedding-ada-002",
@@ -790,22 +790,19 @@ def create_baseline_agent(
     name: str = "TravelAssistant",
 ):
     """
-    Create a baseline travel agent with episodic memory (Cosmos) and RAG (AI Search).
+    Create a baseline travel agent with semantic memory (Cosmos) and RAG (AI Search).
 
     This agent represents the "complete but lifecycle-unmanaged" state:
-    - Can recall past events from Cosmos DB
-    - Can store new events to Cosmos DB
+    - Can recall preferences from the semantic-memory container
+    - Can store new preferences to the semantic-memory container
     - Can search corporate policies via AI Search (hybrid search)
     - Can search flights/hotels from local data
     - Has NO lifecycle management (no identification, promotion, revision, etc.)
 
-    Each lifecycle notebook imports this, demonstrates what goes wrong,
-    then layers on the specific lifecycle mechanism.
-
     Args:
         client: FoundryChatClient instance
-        credential: AzureCliCredential for Cosmos/Search auth
-        cosmos_container: Async Cosmos container client for episodic events
+        credential: AzureCliCredential for Search auth
+        semantic_store: SemanticMemoryStore instance for preferences
         search_client: Azure SearchClient for policy RAG
         openai_client: OpenAI client for embeddings (account-level)
         embedding_model: Embedding model deployment name
@@ -825,49 +822,32 @@ def create_baseline_agent(
 
     tools = [search_flights, search_hotels, get_travel_policy]
 
-    # --- Episodic memory tools (Cosmos DB) ---
-    if cosmos_container is not None:
+    # --- Semantic memory tools (Cosmos DB) ---
+    if semantic_store is not None:
         @tool
-        async def recall_events(
-            user_id: str, event_type: str = "", limit: int = 5
+        async def recall_preferences(
+            user_id: str, query: str = "travel preferences", limit: int = 5
         ) -> str:
-            """Recall past events for a user from episodic memory.
-            Optionally filter by event_type: trip, preference, or feedback."""
-            query = "SELECT * FROM c WHERE c.user_id = @uid"
-            params = [{"name": "@uid", "value": user_id}]
-            if event_type:
-                query += " AND c.event_type = @etype"
-                params.append({"name": "@etype", "value": event_type})
-            query += " ORDER BY c.timestamp DESC OFFSET 0 LIMIT @lim"
-            params.append({"name": "@lim", "value": limit})
-
-            items = [item async for item in cosmos_container.query_items(
-                query, parameters=params, partition_key=user_id
-            )]
-            if not items:
-                return f"No events found for {user_id}"
-            return json.dumps(items, indent=2, default=str)
+            """Recall stored preferences for a user from semantic memory."""
+            results = await semantic_store.search(query, top_k=limit)
+            if not results:
+                return f"No preferences found for {user_id}"
+            lines = [f"[{r['category']}] {r['preference']} (confidence: {r.get('confidence', 0):.2f})"
+                     for r in results]
+            return "\n".join(lines)
 
         @tool
-        async def store_event(
-            user_id: str, event_type: str, description: str, details: str = "{}"
+        async def store_preference(
+            user_id: str, category: str, preference: str,
+            source_type: str = "user_assertion", confidence: float = 0.8
         ) -> str:
-            """Store a new episodic event for a user.
-            event_type should be: trip, preference, or feedback.
-            details is a JSON string with additional structured data."""
-            import uuid as _uuid
-            doc = {
-                "id": f"{user_id}-{_uuid.uuid4().hex[:8]}",
-                "user_id": user_id,
-                "event_type": event_type,
-                "description": description,
-                "details": json.loads(details) if isinstance(details, str) else details,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            await cosmos_container.upsert_item(doc)
-            return f"Stored event: {description}"
+            """Store a personal preference. category: airline, hotel_chain,
+            seating, dietary, home_city, budget, etc."""
+            doc = await semantic_store.add_preference(
+                category, preference, confidence, source_type)
+            return f"Stored [{category}]: {preference}"
 
-        tools.extend([recall_events, store_event])
+        tools.extend([recall_preferences, store_preference])
 
     # --- RAG tools (AI Search) ---
     if search_client is not None and openai_client is not None:
@@ -916,8 +896,8 @@ def create_baseline_agent(
 
     # --- Build agent ---
     instructions = SYSTEM_PROMPT + (
-        "\n\nYou have access to the user's episodic memory and corporate travel policies. "
-        "Before making recommendations, recall the user's past events and preferences. "
+        "\n\nYou have access to the user's semantic memory (preferences) and corporate travel policies. "
+        "Before making recommendations, recall the user's stored preferences. "
         "The current user is Sarah Chen (employee E001)."
     )
     if instructions_suffix:
@@ -939,7 +919,7 @@ def create_baseline_agent(
 
 def setup_backends(credential, env_path: str = "../.env"):
     """
-    Connect to Cosmos DB and AI Search. Returns (cosmos_container, search_client, openai_client).
+    Connect to Cosmos DB (semantic memory) and AI Search. Returns (semantic_store, search_client, openai_client).
 
     Requires env vars: COSMOS_ENDPOINT, AZURE_SEARCH_ENDPOINT, AZURE_SEARCH_KEY,
     FOUNDRY_PROJECT_ENDPOINT, and optionally AZURE_OPENAI_EMBEDDING_DEPLOYMENT.
@@ -948,11 +928,29 @@ def setup_backends(credential, env_path: str = "../.env"):
     from dotenv import load_dotenv
     load_dotenv(env_path, override=True)
 
-    # Cosmos DB (async client)
+    # Cosmos DB — semantic memory container
     from azure.cosmos.aio import CosmosClient
-    cosmos = CosmosClient(os.environ["COSMOS_ENDPOINT"], credential=credential)
-    db = cosmos.get_database_client("travel-memory")
-    cosmos_container = db.get_container_client("episodic-events")
+    from azure.identity.aio import (
+        AzureCliCredential as AsyncCliCredential,
+        get_bearer_token_provider as async_get_bearer_token_provider,
+    )
+    from openai import AsyncAzureOpenAI
+    from shared.semantic_store import SemanticMemoryStore, create_container
+
+    cosmos = CosmosClient(os.environ["COSMOS_ENDPOINT"], credential=AsyncCliCredential())
+
+    embed_deployment = os.environ.get("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-ada-002")
+    embed_client = AsyncAzureOpenAI(
+        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+        azure_ad_token_provider=async_get_bearer_token_provider(
+            AsyncCliCredential(), "https://cognitiveservices.azure.com/.default",
+        ),
+        api_version="2024-02-01",
+    )
+
+    async def _embed(text: str) -> list[float]:
+        r = await embed_client.embeddings.create(input=[text], model=embed_deployment)
+        return r.data[0].embedding
 
     # AI Search
     from azure.search.documents import SearchClient
@@ -963,7 +961,7 @@ def setup_backends(credential, env_path: str = "../.env"):
         credential=AzureKeyCredential(os.environ["AZURE_SEARCH_KEY"]),
     )
 
-    # OpenAI embeddings (account-level endpoint)
+    # OpenAI embeddings (sync, for RAG)
     from openai import OpenAI
     foundry_endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"]
     account_endpoint = foundry_endpoint.split("/api/projects")[0]
@@ -974,4 +972,4 @@ def setup_backends(credential, env_path: str = "../.env"):
         default_headers={"Authorization": f"Bearer {token}"},
     )
 
-    return cosmos_container, search_client, openai_client
+    return cosmos, _embed, search_client, openai_client
