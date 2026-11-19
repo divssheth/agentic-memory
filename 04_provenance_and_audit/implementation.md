@@ -10,9 +10,9 @@ Module 03 completed the semantic-memory lifecycle:
 - belief revision decides which value is current and preserves older versions;
 - retention decides which memories remain worth keeping.
 
-One problem remains at the read boundary. `GraphPromotionStore.gated_recall()`
-and `GraphBeliefStore.recall_current()` reduce a rich Neo4j node to a broad
-state tag and its text:
+One problem remains at the read boundary. `CosmosPromotionStore.gated_recall()`
+and `CosmosBeliefStore.recall_current()` reduce a rich Cosmos DB preference
+document to a broad state tag and its text:
 
 ```text
 [KNOWN] Prefers Marriott
@@ -25,7 +25,7 @@ can answer *"may I use this?"* and *"which value is current?"*, but the agent
 cannot reliably answer *"why do you believe this?"* or choose language that
 reflects the strength of the evidence.
 
-Module 04 solves that specific gap by enriching the existing Module 03 nodes
+Module 04 solves that specific gap by enriching the existing Module 03 documents
 with evidence metadata. It does not create a parallel set of memories. It
 preserves provenance and confidence through recall, exposes an explanation
 tool, and teaches the agent to assert, hedge, or ask without changing the
@@ -76,21 +76,23 @@ Module 04 has its own focused utility:
 
 ```text
 04_provenance_and_audit/lifecycle_utils.py
-└── GraphProvenanceStore
+└── CosmosProvenanceStore
 ```
 
 This follows Module 03's primary-object-per-concept pattern
-(`GraphPromotionStore`, `GraphBeliefStore`, `GraphRetentionStore`) without
-adding provenance APIs to those teaching objects. `GraphProvenanceStore` reads
-the same Neo4j `Preference` nodes, attaches evidence metadata to them, and
-preserves their lifecycle state, confidence, and temporal history.
+(`CosmosPromotionStore`, `CosmosBeliefStore`, `CosmosRetentionStore`) without
+adding provenance APIs to those teaching objects. `CosmosProvenanceStore` reads
+the same Cosmos DB preference documents via `SemanticMemoryStore`, attaches
+evidence metadata to them, and preserves their lifecycle state, confidence, and
+temporal history.
 
-### `GraphProvenanceStore` operations
+### `CosmosProvenanceStore` operations
 
 | Method | Purpose |
 |---|---|
 | `prerequisite_count()` | Verify that Module 03 lifecycle memories exist |
 | `enrich()` | Attach source evidence and creator metadata to an existing current memory |
+| `confirm()` | Confirm the closest matching belief and advance its lifecycle state |
 | `recall_baseline()` | Reproduce Module 03's state-tagged but provenance-lossy projection |
 | `recall_with_confidence()` | Return visible beliefs with structured provenance and presentation strategy |
 | `explain()` | Return the current belief's origin, evidence, validation, and compact lineage |
@@ -114,12 +116,12 @@ Extend the existing travel agent with two capabilities:
 
 1. Verify that Module 03 lifecycle memories exist for the selected user.
 2. Reproduce Module 03's output boundary with `recall_baseline()` over those
-   existing nodes.
+   existing documents.
 3. Ask why the agent believes one of them and show that the projection does not
    contain enough information to answer safely.
 4. Explain provenance and distinguish it from confidence, history, and trust.
-5. Enrich the same nodes with the evidence from the Module 03 interactions.
-6. Recall and explain those nodes through a structured, confidence-aware view.
+5. Enrich the same documents with the evidence from the Module 03 interactions.
+6. Recall and explain those documents through a structured, confidence-aware view.
 
 ### State Before Confidence
 
@@ -145,7 +147,7 @@ Confidence never bypasses the lifecycle gate established in Module 03:
 
 1. Module 03's hotel and home-city memories are recalled without provenance.
 2. `enrich()` attaches the known statements from the earlier notebook to those
-   same nodes.
+   same documents.
 3. An invariant check proves the preference count did not change.
 4. Structured recall applies assert/hedge/ask using the existing state and
    confidence values.
@@ -160,7 +162,7 @@ Confidence never bypasses the lifecycle gate established in Module 03:
 
 - Module 3.3 for staged trust and visibility semantics
 - Module 3.4 for current values and temporal lineage
-- The same Neo4j and Foundry configuration used in Module 03
+- The same Cosmos DB and Foundry configuration used in Module 03
 - Module 03 must be executed first; the notebook fails fast if no lifecycle
    memories exist for the selected user
 

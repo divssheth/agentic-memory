@@ -118,7 +118,3 @@ class CosmosProvenanceStore:
                 return "assert"
             return "hedge" if confidence >= 0.5 else "ask"
         return "withhold"
-
-
-# Backward-compatible alias
-GraphProvenanceStore = CosmosProvenanceStore

@@ -9,26 +9,26 @@ Every notebook follows a **problem-first** structure: demonstrate a failure → 
 | Module | Folder | Notebooks | Status | What You'll Build |
 |--------|--------|-----------|--------|-------------------|
 | **01 Foundations** | `01_foundations/` | 1 | ✅ Complete | Stateless vs stateful agents; session memory basics |
-| **02 Memory Layers** | `02_memory_layers/` | 4 | ✅ Complete | Chat history (Cosmos), episodic (Cosmos), semantic (Neo4j), procedural (SkillsProvider) |
-| **03 Memory Lifecycle** | `03_memory_lifecycle/` | 7 | ✅ Complete | Memory vs RAG, identification, staged promotion (Neo4j), belief revision (SCD Type 2), retention, episodic + procedural lifecycle |
+| **02 Memory Layers** | `02_memory_layers/` | 4 | ✅ Complete | Chat history (Cosmos), episodic (Cosmos), semantic (Cosmos vector search), procedural (SkillsProvider) |
+| **03 Memory Lifecycle** | `03_memory_lifecycle/` | 7 | ✅ Complete | Memory vs RAG, identification, staged promotion, belief revision (SCD Type 2), retention, episodic + procedural lifecycle |
 | **04 Provenance & Confidence** | `04_provenance_and_audit/` | 1 | 🧪 Ready to test | `explain_belief` tool + confidence-aware recall (assert / hedge / ask) |
-| **05 Retention & Routing** | `05_retrieval/` | 2 | 📋 Planned | Bounded memory with eviction scoring; multi-store agent (LLM-as-router) |
-| **06 Governance & User Control** | `06_governance/` | 2 | 📋 Planned | User inspect/correct/delete tools; role-based memory scoping via middleware |
-| **07 Security** | `07_security/` | 2 | 📋 Planned | Memory poisoning attacks (3 channels); defense-in-depth (origin ceiling + Sybil resistance) |
-| **08 Evaluation** | `08_evaluation/` | 2 | 📋 Planned | MEMPROBE-style quality probing; sycophancy + adversarial robustness testing |
-| **09 Multi-Agent** | `09_multi_agent/` | 2 | 📋 Planned | Scoped memory handoff between agents; cross-user isolation on shared Neo4j |
-| **10 Unified Agent** | `10_unified_agent/` | 1 | 📋 Planned | Capstone: one MAF agent with ALL memory capabilities in a 12-turn demo |
+| **05 Retrieval & Routing** | `05_retrieval/` | 2 | 📋 Planned | Lifecycle-aware bounded retrieval; multi-store agent (LLM-as-router) |
+| **06 Governance & User Control** | `06_governance/` | 2 | 📋 Planned | Inspect/correct/retire/erase tools with verified erasure; role-based memory scoping |
+| **07 Security** | `07_security/` | 2 | 📋 Planned | Memory poisoning and unauthorized erasure attacks; defense-in-depth (origin ceiling + independent corroboration) |
+| **08 Evaluation** | `08_evaluation/` | 2 | 📋 Planned | MEMPROBE-style quality probing; canary erasure test; sycophancy + adversarial robustness testing |
+| **09 Multi-Agent** | `09_multi_agent/` | 2 | 📋 Planned | Scoped memory handoff between agents; cross-user isolation on shared Cosmos containers |
+| **10 Unified Agent** | `10_unified_agent/` | 1 | 📋 Planned | Capstone: one MAF agent with ALL memory capabilities in a six-act demo |
 
 **Total: 24 notebooks** — each using Microsoft Agent Framework (MAF) agents with `@tool`, never standalone Python demo code.
 
 ## Scenario: Corporate Travel Assistant
 
 Throughout this series, we build **one** travel booking agent that progressively gains:
-- **Memory layers** — past trips (episodic / Cosmos DB), preferences (semantic / Neo4j), policies (procedural / SkillsProvider), chat history (AgentSession)
+- **Memory layers** — past trips (episodic / Cosmos DB), preferences (semantic / Cosmos DB vector search), policies (procedural / SkillsProvider), chat history (AgentSession)
 - **Lifecycle management** — what to store, when to trust it, how to revise it, when to evict it
 - **Provenance & confidence** — explain any belief, hedge uncertain ones, assert confirmed ones
-- **Governance** — users inspect/correct/delete their profile; agents see only their allowed scope
-- **Security** — staged promotion + origin ceiling + Sybil-resistant corroboration = 0% attack success
+- **Governance** — users inspect/correct/retire/erase their profile; agents see only their allowed scope
+- **Security** — staged promotion + origin ceiling + independent corroboration = 0% attack success
 - **Evaluation** — memory quality probing, sycophancy detection, adversarial robustness
 - **Multi-agent** — scoped handoff, cross-user isolation on shared storage
 
@@ -37,9 +37,8 @@ Throughout this series, we build **one** travel booking agent that progressively
 - Python 3.11+ (tested on 3.14)
 - Azure subscription with:
   - Azure AI Foundry project (endpoint + model deployment)
-  - Azure Cosmos DB (episodic + chat history)
+  - Azure Cosmos DB for NoSQL with vector search (chat history, episodic and semantic memory)
   - Azure AI Search (RAG ground truth — Module 03+)
-  - Neo4j Aura (semantic memory — Module 02+)
 - Authentication: Azure CLI (`az login`)
 
 ## Quick Start
@@ -68,24 +67,25 @@ agentic-memory/
 ├── 02_memory_layers/              # Four memory types
 │   ├── 01_chat_history.ipynb      # Cosmos DB chat persistence
 │   ├── 02_episodic_memory.ipynb   # Event storage + recall
-│   ├── 03_semantic_memory.ipynb   # Neo4j knowledge graph
+│   ├── 03_semantic_memory.ipynb   # Cosmos DB vector-backed preferences
 │   ├── 04_procedural_memory.ipynb # Skills + budget rules
 │   ├── skills/                    # SKILL.md procedure files
 │   └── steps/                     # Backend setup guides
-├── 03_memory_lifecycle/           # Lifecycle management (Neo4j-backed)
+├── 03_memory_lifecycle/           # Lifecycle management (Cosmos-backed)
 │   ├── 00_setup_ai_search.ipynb   # RAG index provisioning
 │   ├── 01_memory_vs_rag.ipynb     # Context vs RAG vs Memory
 │   ├── 02_memory_identification.ipynb  # SkillsProvider + ToolApprovalMiddleware
-│   ├── 03_staged_promotion_neo4j.ipynb # GraphPromotionStore trust state machine
-│   ├── 04_belief_revision.ipynb   # GraphBeliefStore + SCD Type 2
+│   ├── 03_staged_promotion.ipynb  # CosmosPromotionStore trust state machine
+│   ├── 04_belief_revision.ipynb   # CosmosBeliefStore + SCD Type 2
 │   ├── 05_retention_and_decay.ipynb # Bounded memory + eviction scoring
 │   ├── 06_episodic_and_procedural_lifecycle.ipynb # TTL-based episodic + 3-tier procedural
 │   ├── lifecycle_utils.py         # Shared stores + engines (grows each module)
 │   └── skills/                    # Memory identification skills
 ├── 04_provenance_and_audit/       # Provenance + confidence-aware recall
-│   └── 01_provenance_and_confidence.ipynb
-├── 05_retrieval/                  # Retention + multi-store routing
-│   ├── 01_retention_and_decay.ipynb
+│   ├── 01_provenance_and_confidence.ipynb
+│   └── lifecycle_utils.py         # CosmosProvenanceStore
+├── 05_retrieval/                  # Lifecycle-aware retrieval + multi-store routing
+│   ├── 01_retrieval_and_ranking.ipynb
 │   └── 02_memory_routing.ipynb
 ├── 06_governance/                 # User control + access scoping
 │   ├── 01_user_control.ipynb
@@ -103,8 +103,8 @@ agentic-memory/
 │   └── 01_unified_memory_agent.ipynb
 ├── data/                          # Employees, flights, hotels, policies
 ├── shared/                        # Reusable utilities
+│   ├── semantic_store.py          # SemanticMemoryStore (Cosmos DB + vector search)
 │   └── travel_agent.py            # Client factory, tools, system prompt
-├── notebooks/                     # Standalone versions (01-07) for workshop use
 ├── requirements.txt
 └── azure.yaml
 ```
@@ -116,10 +116,10 @@ All lifecycle capabilities accumulate in one shared module:
 | Class | Module | Purpose |
 |-------|--------|---------|
 | `PromotionEngine` | 3.3 | Configurable promotion criteria evaluation |
-| `GraphPromotionStore` | 3.3 | Trust state machine: candidate → provisional → trusted |
-| `GraphBeliefStore` | 3.4 | SCD Type 2 belief revision with time-travel queries |
+| `CosmosPromotionStore` | 3.3 | Trust state machine: candidate → provisional → trusted |
+| `CosmosBeliefStore` | 3.4 | SCD Type 2 belief revision with time-travel queries |
 | `RetentionScorer` | 3.5 | Multi-signal scoring for bounded memory eviction |
-| `GraphRetentionStore` | 3.5 | Neo4j-backed capacity-bounded memory store |
+| `CosmosRetentionStore` | 3.5 | Cosmos-backed capacity-bounded memory store |
 | `EpisodicTTLConfig` | 3.6 | TTL configuration for episodic event expiry |
 | `ProceduralReflection` | 3.6 | Data model for agent-learned procedural lessons |
 
@@ -132,12 +132,10 @@ FOUNDRY_PROJECT_ENDPOINT=https://your-foundry.services.ai.azure.com/api/projects
 FOUNDRY_MODEL=gpt-5-mini
 AZURE_TENANT_ID=your-tenant-id
 COSMOS_ENDPOINT=https://your-cosmos.documents.azure.com:443/
+COSMOS_DATABASE=travel-memory
+COSMOS_SEMANTIC_CONTAINER=semantic-memory
 AZURE_SEARCH_ENDPOINT=https://your-search.search.windows.net
 AZURE_SEARCH_KEY=your-admin-key
-NEO4J_URI=neo4j+s://your-instance.databases.neo4j.io
-NEO4J_USERNAME=neo4j
-NEO4J_PASSWORD=...
-NEO4J_DATABASE=neo4j
 ```
 
 ## Key Technical Decisions

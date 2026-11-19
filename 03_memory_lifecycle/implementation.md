@@ -17,7 +17,7 @@ This module maps to discussion requirements: FR-004 (Memory Identification), FR-
 | 00 — AI Search Setup | ✅ DONE | `00_setup_ai_search.ipynb` |
 | 01 — Memory vs RAG | ✅ DONE | `01_memory_vs_rag.ipynb` |
 | 02 — Memory Identification | ✅ DONE | `02_memory_identification.ipynb` |
-| 03 — Staged Promotion | ✅ DONE | `03_staged_promotion_neo4j.ipynb` |
+| 03 — Staged Promotion | ✅ DONE | `03_staged_promotion.ipynb` |
 | 04 — Belief Revision | ✅ DONE | `04_belief_revision.ipynb` |
 | 05 — Retention & Decay | ✅ DONE | `05_retention_and_decay.ipynb` |
 | 06 — Episodic & Procedural Lifecycle | ✅ DONE | `06_episodic_and_procedural_lifecycle.ipynb` |
@@ -25,11 +25,11 @@ This module maps to discussion requirements: FR-004 (Memory Identification), FR-
 ### Architecture Note
 
 Notebooks 03–05 each introduce a separate store class for pedagogical clarity:
-- `GraphPromotionStore` (03) — trust gating
-- `GraphBeliefStore` (04) — temporal revision
-- `GraphRetentionStore` (05) — capacity management
+- `CosmosPromotionStore` (03) — trust gating
+- `CosmosBeliefStore` (04) — temporal revision
+- `CosmosRetentionStore` (05) — capacity management
 
-These compose on the **same Neo4j Preference nodes** (each manages orthogonal properties).
+These compose on the **same Cosmos DB preference documents** in `SemanticMemoryStore` (each manages orthogonal properties).
 In Module 10 (Unified Agent), they collapse into a single `MemoryLifecycleManager`.
 
 ---
