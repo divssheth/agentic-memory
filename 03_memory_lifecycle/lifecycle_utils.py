@@ -1,5 +1,5 @@
 """
-Shared utilities for Module 03 — Memory Lifecycle.
+Shared utilities for Module 3 — Memory Lifecycle.
 
 Provides core data models and engines used across all lifecycle notebooks:
 - MemoryState enum and transitions
@@ -236,7 +236,6 @@ class CosmosPromotionStore:
         state = "provisional" if source_type == "user_assertion" else "candidate"
         doc = await self._s.add_preference(category, preference, confidence,
                                            source_type, state)
-        return state
         return state
 
     async def record_trusted(self, category, preference, confidence=0.9) -> None:

@@ -38,7 +38,7 @@ Throughout this series, we build **one** travel booking agent that progressively
 - Azure subscription with:
   - Azure AI Foundry project (endpoint + model deployment)
   - Azure Cosmos DB for NoSQL with vector search (chat history, episodic and semantic memory)
-  - Azure AI Search (RAG ground truth — Module 03+)
+  - Azure AI Search (RAG ground truth — Module 3+)
 - Authentication: Azure CLI (`az login`)
 
 ## Quick Start
@@ -109,12 +109,17 @@ agentic-memory/
 └── azure.yaml
 ```
 
-## Shared Infrastructure: `lifecycle_utils.py`
+## Shared Infrastructure
 
-All lifecycle capabilities accumulate in one shared module:
+All lifecycle stores operate on the same Cosmos DB preference documents managed by
+`SemanticMemoryStore` ([shared/semantic_store.py](shared/semantic_store.py)). Module 3's
+classes live in [03_memory_lifecycle/lifecycle_utils.py](03_memory_lifecycle/lifecycle_utils.py);
+Module 4 adds `CosmosProvenanceStore` in its own
+[04_provenance_and_audit/lifecycle_utils.py](04_provenance_and_audit/lifecycle_utils.py).
 
 | Class | Module | Purpose |
 |-------|--------|---------|
+| `SemanticMemoryStore` | 2.3 | Cosmos DB preference documents with vector search and SCD Type 2 supersession |
 | `PromotionEngine` | 3.3 | Configurable promotion criteria evaluation |
 | `CosmosPromotionStore` | 3.3 | Trust state machine: candidate → provisional → trusted |
 | `CosmosBeliefStore` | 3.4 | SCD Type 2 belief revision with time-travel queries |
@@ -122,15 +127,15 @@ All lifecycle capabilities accumulate in one shared module:
 | `CosmosRetentionStore` | 3.5 | Cosmos-backed capacity-bounded memory store |
 | `EpisodicTTLConfig` | 3.6 | TTL configuration for episodic event expiry |
 | `ProceduralReflection` | 3.6 | Data model for agent-learned procedural lessons |
-
-Each later module adds methods to these classes rather than creating new ones.
+| `CosmosProvenanceStore` | 4.1 | Evidence metadata, `explain()` and confidence-aware recall |
 
 ## Environment Variables
 
 ```env
 FOUNDRY_PROJECT_ENDPOINT=https://your-foundry.services.ai.azure.com/api/projects/proj-default
 FOUNDRY_MODEL=gpt-5-mini
-AZURE_TENANT_ID=your-tenant-id
+AZURE_OPENAI_ENDPOINT=https://your-service.openai.azure.com
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-ada-002
 COSMOS_ENDPOINT=https://your-cosmos.documents.azure.com:443/
 COSMOS_DATABASE=travel-memory
 COSMOS_SEMANTIC_CONTAINER=semantic-memory
