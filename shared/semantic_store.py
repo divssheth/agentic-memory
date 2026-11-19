@@ -305,13 +305,30 @@ class SemanticMemoryStore:
 
     async def set_state(self, doc_id: str, state: str) -> None:
         """Update the lifecycle state of a preference."""
+        await self.update_fields(doc_id, {"state": state})
+
+    async def update_fields(self, doc_id: str, fields: dict) -> None:
+        """Set top-level fields on a preference document via a partial patch."""
         await self._c.patch_item(
             item=doc_id,
             partition_key=self._user_id,
             patch_operations=[
-                {"op": "set", "path": "/state", "value": state},
+                {"op": "set", "path": f"/{name}", "value": value}
+                for name, value in fields.items()
             ],
         )
+
+    async def stale_trusted_ids(self, cutoff: str) -> list[str]:
+        """Ids of trusted preferences whose last confirmation is before `cutoff` (ISO 8601)."""
+        sql = ("SELECT c.id FROM c WHERE c.user_id = @uid "
+               "AND c.state = 'trusted' AND c.last_confirmed < @cutoff")
+        params = [{"name": "@uid", "value": self._user_id},
+                  {"name": "@cutoff", "value": cutoff}]
+        if self.scope_tag:
+            sql += " AND c.scope_tag = @scope"
+            params.append({"name": "@scope", "value": self.scope_tag})
+        return [item["id"] async for item in self._c.query_items(
+            sql, parameters=params, partition_key=self._user_id)]
 
     # ----- reset -----
 

@@ -24,14 +24,8 @@ class CosmosProvenanceStore:
         cleared = 0
         for d in docs:
             if d.get("source_detail") or d.get("created_by"):
-                await self._s._c.patch_item(
-                    item=d["id"],
-                    partition_key=self._s._user_id,
-                    patch_operations=[
-                        {"op": "set", "path": "/source_detail", "value": None},
-                        {"op": "set", "path": "/created_by", "value": None},
-                    ],
-                )
+                await self._s.update_fields(
+                    d["id"], {"source_detail": None, "created_by": None})
                 cleared += 1
         return cleared
 

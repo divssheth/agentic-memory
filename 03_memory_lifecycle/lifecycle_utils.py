@@ -261,17 +261,7 @@ class CosmosPromotionStore:
         """Demote trusted memories unconfirmed past the staleness window."""
         cutoff = (datetime.now(timezone.utc) - timedelta(
             days=self.config.staleness_days)).isoformat()
-        sql = (
-            "SELECT c.id FROM c WHERE c.user_id = @uid "
-            "AND c.state = 'trusted' AND c.last_confirmed < @cutoff"
-        )
-        params = [{"name": "@uid", "value": self._s._user_id},
-                  {"name": "@cutoff", "value": cutoff}]
-        if self._s.scope_tag:
-            sql += " AND c.scope_tag = @scope"
-            params.append({"name": "@scope", "value": self._s.scope_tag})
-        ids = [item["id"] async for item in self._s._c.query_items(
-            sql, parameters=params, partition_key=self._s._user_id)]
+        ids = await self._s.stale_trusted_ids(cutoff)
         for doc_id in ids:
             await self._s.set_state(doc_id, "provisional")
         return len(ids)
@@ -301,13 +291,7 @@ class CosmosPromotionStore:
         results = await self._s.search(preference_text, top_k=1)
         if results:
             old_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-            await self._s._c.patch_item(
-                item=results[0]["id"],
-                partition_key=self._s._user_id,
-                patch_operations=[
-                    {"op": "set", "path": "/last_confirmed", "value": old_date},
-                ],
-            )
+            await self._s.update_fields(results[0]["id"], {"last_confirmed": old_date})
 
 
 # ---------------------------------------------------------------------------
@@ -562,17 +546,14 @@ class CosmosRetentionStore:
         first_seen = (datetime.now(timezone.utc) - timedelta(days=age_days)).isoformat()
         last_accessed = (datetime.now(timezone.utc) - timedelta(
             days=int(age_days * 0.3))).isoformat() if access_count > 0 else None
-        ops = [
-            {"op": "set", "path": "/first_seen", "value": first_seen},
-            {"op": "set", "path": "/access_count", "value": access_count},
-            {"op": "set", "path": "/success_correlation", "value": success_correlation},
-        ]
+        fields = {
+            "first_seen": first_seen,
+            "access_count": access_count,
+            "success_correlation": success_correlation,
+        }
         if last_accessed:
-            ops.append({"op": "set", "path": "/last_accessed", "value": last_accessed})
-        await self._s._c.patch_item(
-            item=doc["id"], partition_key=self._s._user_id,
-            patch_operations=ops,
-        )
+            fields["last_accessed"] = last_accessed
+        await self._s.update_fields(doc["id"], fields)
         return doc["id"]
 
     async def score_all(self) -> list[dict]:
@@ -595,14 +576,10 @@ class CosmosRetentionStore:
             scored.append({"id": d["id"], "preference": d["preference"],
                            "state": d["state"], "score": score})
             # Write score back
-            await self._s._c.patch_item(
-                item=d["id"], partition_key=self._s._user_id,
-                patch_operations=[
-                    {"op": "set", "path": "/retention_score", "value": score},
-                    {"op": "set", "path": "/last_scored",
-                     "value": datetime.now(timezone.utc).isoformat()},
-                ],
-            )
+            await self._s.update_fields(d["id"], {
+                "retention_score": score,
+                "last_scored": datetime.now(timezone.utc).isoformat(),
+            })
         scored.sort(key=lambda x: x["score"])
         return scored
 
