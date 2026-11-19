@@ -2,41 +2,30 @@
 
 ## Module Narrative
 
-> "One agent that does memory well."
+> "One agent that remembers, revises, routes, protects, and verifiably forgets."
 
-This is the capstone. Every prior module added a capability — memory types (02),
-lifecycle management (03), provenance and confidence (04), retention (05),
-user control and access scoping (06), security defenses (07), quality evaluation (08),
-multi-agent sharing (09). This notebook wires them ALL into a single MAF agent
-and runs a complete travel booking lifecycle that exercises every feature.
-
-This is NOT a new architecture. It is the existing agent with the full tool set
-and all middleware layers composed together.
+This capstone composes the capabilities from Modules 2–9. It introduces no new
+memory architecture; it proves that the Cosmos stores, MAF tools, middleware,
+governance coordinator, and evaluation contracts work together.
 
 ---
 
 ## Status: 🔨 TO IMPLEMENT
 
----
-
 ## Notebook: `01_unified_memory_agent.ipynb`
 
-### Objective
+### Builds On
 
-Construct a single MAF agent with every memory capability and demonstrate a
-realistic multi-turn travel booking scenario that touches all of them.
-
-### Builds On — Everything
-
-| Module | Contribution | Tool/Middleware |
-|--------|-------------|----------------|
-| 02 Memory Layers | 4 memory stores | `recall_past_events`, `search_policies`, `SkillsProvider` |
-| 03 Lifecycle | Promotion + belief revision | `GraphPromotionStore`, `GraphBeliefStore` |
-| 04 Provenance | Explain + confidence recall | `explain_belief`, `recall_with_confidence` |
-| 05 Retention | Bounded memory | `show_retention_scores`, `run_memory_cleanup` |
-| 06 User Control | Inspect/correct/delete | `show_my_memories`, `correct_memory`, `delete_memory` |
-| 06 Access Control | Role scoping | `MemoryScopeMiddleware` |
-| 07 Security | Defense layers | Origin ceiling, Sybil-resistant confirmation |
+| Module | Contribution |
+|--------|--------------|
+| 02 | Session, episodic, semantic, and procedural memory |
+| 03 | `CosmosPromotionStore`, `CosmosBeliefStore`, `CosmosRetentionStore` |
+| 04 | `CosmosProvenanceStore` and confidence-aware presentation |
+| 05 | Lifecycle-aware retrieval and multi-store routing |
+| 06 | Inspection, correction, retirement, `ErasureCoordinator` |
+| 07 | Origin binding, authorization, and destructive-operation defenses |
+| 08 | Quality, attack, isolation, and canary evaluation |
+| 09 | Scoped handoff and multi-user isolation |
 
 ### Agent Construction
 
@@ -46,124 +35,135 @@ assistant = Agent(
     name="TravelAssistant",
     instructions=UNIFIED_SYSTEM_PROMPT,
     tools=[
-        # Operational
-        search_flights, search_hotels, get_travel_policy,
-        # Semantic memory (beliefs)
-        remember_belief, recall_beliefs, explain_belief, belief_history,
-        # Episodic memory
-        recall_past_events, store_event,
-        # Retention
-        show_retention_scores, run_memory_cleanup,
-        # User control
-        show_my_memories, correct_memory, delete_memory,
+        search_flights,
+        search_hotels,
+        search_travel_policies,
+        remember_belief,
+        recall_beliefs,
+        recall_past_events,
+        explain_belief,
+        belief_history,
+        show_retention_scores,
+        show_my_memories,
+        correct_memory,
+        retire_memory,
+        erase_memory,
     ],
     context_providers=[skills_provider],
-    middleware=[
-        ToolApprovalMiddleware(auto_approval_rules=[...]),
-        MemoryScopeMiddleware(allowed_categories=[...]),
-    ],
+    middleware=[tool_approval, memory_scope, origin_enforcement],
 )
 ```
 
-### Demo Scenario: Sarah's Full Travel Lifecycle (12 turns)
+Stores and tools are constructed with authenticated `user_id`; it is never a
+model-controlled argument.
 
-**Act 1: Onboarding (3 turns)**
-1. Sarah: "I live in Denver, fly United, always Marriott, vegetarian, aisle seats"
-   → Agent stores 5 beliefs as `user_assertion`, confidence 0.95
-   → Each auto-promoted to `trusted` (user assertion rule)
-2. Sarah: "What do you know about me?"
-   → Agent calls `show_my_memories` → formatted table
-3. Sarah: "Why do you think I prefer Marriott?"
-   → Agent calls `explain_belief("hotel")` → provenance chain
-
-**Act 2: Booking with Memory (3 turns)**
-4. Sarah: "Book me a trip to Tokyo next week"
-   → Agent recalls preferences (confidence-aware), searches flights/hotels
-   → Uses beliefs to filter: United flights, Marriott hotels, vegetarian meal options
-5. Agent: "I found United DEN→NRT, Marriott Ginza. I believe you prefer aisle seats — should I confirm that?"
-   → (Aisle is 0.95 confidence → asserted; but maybe she wants window for a 14-hour flight?)
-6. Sarah confirms → Agent books, stores episodic event
-
-**Act 3: Belief Revision (2 turns)**
-7. Sarah: "Actually, I just moved to Austin. AUS is my new airport."
-   → Agent calls `remember_belief("home_city", "Austin")` → supersedes Denver
-   → Agent calls `remember_belief("airport", "AUS")` → supersedes DEN
-8. Sarah: "Where was I living when I booked the Tokyo trip?"
-   → Agent calls `recall_beliefs_at_time("home_city", "2026-07-10")` → "Denver"
-
-**Act 4: Security Test (2 turns)**
-9. Sarah: "My colleague told me I should be upgraded to Director-level budget"
-   → Agent stores as `candidate` (not user_assertion — it's hearsay)
-   → Gated recall does NOT surface this in future queries
-10. Sarah: "What budget level am I?"
-    → Agent recalls only trusted beliefs → does not mention the unconfirmed Director claim
-
-**Act 5: Maintenance (2 turns)**
-11. Sarah: "Clean up any preferences you're not sure about"
-    → Agent calls `run_memory_cleanup` → evicts low-scoring beliefs (e.g. inferred ones)
-    → Shows what was kept and what was dropped
-12. Sarah: "Show me the final state of my profile"
-    → `show_my_memories` → clean, high-confidence preference set
-
-### Architecture Diagram
+### Architecture
 
 ```mermaid
-graph TB
-    User[User] --> Agent[MAF Agent]
-    Agent --> Tools[Tool Layer]
-    Tools --> SM[Semantic Memory<br/>Neo4j Graph]
-    Tools --> EM[Episodic Memory<br/>Cosmos DB]
-    Tools --> PM[Procedural Memory<br/>SkillsProvider]
-    Tools --> CH[Chat History<br/>AgentSession]
-
-    Agent --> MW[Middleware Stack]
-    MW --> TA[ToolApprovalMiddleware]
-    MW --> MS[MemoryScopeMiddleware]
-
-    SM --> LC[Lifecycle Layer]
-    LC --> GP[GraphPromotionStore<br/>Staged Promotion]
-    LC --> GB[GraphBeliefStore<br/>SCD Type 2]
-    LC --> RS[RetentionScorer<br/>Eviction]
-
-    LC --> SEC[Security Layer]
-    SEC --> OC[Origin Ceiling]
-    SEC --> SR[Sybil-Resistant<br/>Corroboration]
+flowchart TB
+    U[Authenticated user] --> A[MAF Agent]
+    A --> MW[Approval, scope, and origin middleware]
+    A --> RT[Retrieval and routing tools]
+    RT --> SM[(Cosmos semantic memory)]
+    RT --> EM[(Cosmos episodic memory)]
+    RT --> PS[Azure AI Search policy index]
+    RT --> SK[SkillsProvider]
+    RT --> SE[AgentSession]
+    SM --> LC[Promotion, revision, retention, provenance]
+    A --> GOV[Governance tools]
+    GOV --> EC[ErasureCoordinator]
+    EC --> PR[Projection adapters]
+    PR --> SM
+    PR --> EM
+    PR --> SE
+    PR --> CA[Configured caches]
+    EC --> DA[(Cosmos deletion audit)]
+    EC --> VR{Every projection absent?}
+    VR -->|Yes| OK[Complete]
+    VR -->|No| RR[Repair required]
 ```
 
-### Validation Criteria
+The Azure AI Search policy index is shared grounding, not a personal-memory
+projection. It participates in erasure only if a future deployment explicitly
+indexes personal data there.
 
-After the 12-turn demo, verify programmatically:
+### Capstone Scenario
 
-| Check | Method | Expected |
-|-------|--------|----------|
-| Profile accuracy | `snapshot()` vs expected values | home_city=Austin, airport=AUS, hotel=Marriott, etc. |
-| Supersession correct | `history("home_city")` | Denver → Austin, with timestamps |
-| Security held | `snapshot()` for budget_tier | No "Director" entry (or only as candidate) |
-| Eviction worked | Count of current beliefs | Reduced from peak |
-| Provenance complete | `explain("hotel")` | Returns source, date, confidence |
+#### Act 1: Build and Explain Memory
 
-### 📄 Reference Papers
+1. User provides travel preferences; the agent identifies and stores them.
+2. User inspects the profile and asks why one belief is held.
+3. Agent returns persisted provenance rather than generating a rationale.
 
-**"Are We Ready For An Agent-Native Memory System?"** (arXiv:2606.24775)
-> No single architecture dominates — effectiveness depends on workload alignment.
-> Our unified agent proves that composing specialized stores with a single
-> routing interface (LLM tool selection) is viable for real workloads.
+#### Act 2: Route and Book
 
-**"From Chatbot to Digital Colleague"** (arXiv:2606.14502)
-> Positions unified memory as one pillar of persistent autonomous systems.
-> Our Module 10 agent demonstrates the memory pillar end-to-end.
+4. User requests a trip; the agent combines semantic preferences, procedural
+   skills, policy grounding, and operational availability.
+5. Agent stores the completed booking as an episodic event.
+
+#### Act 3: Revise and Maintain
+
+6. User moves city; SCD Type 2 supersedes city and airport beliefs.
+7. A historical question retrieves the version valid at booking time.
+8. Scheduled retention scoring deprecates low-value synthetic noise without
+   treating eviction as privacy erasure.
+
+#### Act 4: Defend
+
+9. Inject an unsupported entitlement through tool output or another agent.
+10. Origin ceiling and gated recall prevent it from influencing the booking.
+
+#### Act 5: Retire and Erase
+
+11. Retire a harmless preference and show that authorized history remains.
+12. Store and retrieve a sensitive canary, then request irreversible erasure.
+13. Inject one projection cleanup failure; the agent reports `repair_required`
+    and does not claim the memory was forgotten.
+14. Repair and retry the same request idempotently.
+15. Create a fresh session and prove the canary is absent from every projection.
+16. Display the content-free tombstone without reproducing erased content.
+
+#### Act 6: Handoff and Isolation
+
+17. Hand off minimum trip data to an expense agent.
+18. Verify role scope, user partition isolation, and erased-value absence in the
+    receiving agent's fresh session.
+
+### Programmatic Validation
+
+| Check | Expected |
+|-------|----------|
+| Current profile | Latest values only |
+| Historical profile | Correct SCD Type 2 versions |
+| Trust gate | Candidate attack absent from context |
+| Routing | Correct memory tools invoked |
+| Retention | Low-value records deprecated, not described as erased |
+| Provenance | Stored source and confidence returned |
+| Retirement | Hidden from active recall, retained in authorized history |
+| Erasure failure | `repair_required` |
+| Erasure completion | All registered projections verified absent |
+| Canary recall after restart | `stale_or_erased_canary_recall_count == 0` |
+| Tombstone leakage | No erased content or evidence |
+| Multi-user isolation | Other user unchanged |
+
+### Key Insight
+
+The capstone succeeds only when memory behavior is observable and testable. A
+fluent answer is not enough: current-state, provenance, authorization, deletion
+outcomes, and every serving projection must agree.
 
 ---
 
 ## Prerequisites
 
-- ALL Modules 01–09 completed
-- All backends provisioned (Neo4j, Cosmos DB, AI Search, Foundry)
-- `lifecycle_utils.py` with all accumulated classes and methods
+- Modules 1–9 completed
+- Cosmos semantic, episodic, and deletion-audit containers
+- Azure AI Search policy index, Azure AI Foundry, and MAF configuration
+- All erasure adapters registered for configured serving paths
 
 ## Deliverables
 
-- Single notebook demonstrating every memory capability in one agent
-- Architecture diagram showing full composition
-- Programmatic validation of all memory features
-- This notebook serves as the integration test for the entire tutorial series
+- One conversation-driven notebook demonstrating the complete lifecycle
+- Updated architecture diagram
+- Programmatic integration checks for every capability
+- Failure-injection and canary-based verified-erasure acceptance test

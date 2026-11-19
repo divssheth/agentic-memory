@@ -1,17 +1,20 @@
-# 05 Retention & Routing — Implementation Plan
+# 05 Retrieval & Routing — Implementation Plan
 
 ## Module Narrative
 
-> "Bounded memory: know what to keep, know where to look."
+> "The agent has memory. Now it must know what to retrieve and where to look."
 
-Memory grows without bound. This module addresses two problems:
-1. **Retention** — the agent must actively manage its memory capacity, evicting
-   low-value beliefs before the store becomes noisy
-2. **Routing** — with four memory types available (chat history, episodic, semantic,
-   procedural), the agent must pick the right store for each query
+Modules 2–4 established four memory types, lifecycle management, and
+confidence-aware recall. This module turns those capabilities into a bounded
+retrieval path and gives one Microsoft Agent Framework (MAF) agent access to
+the appropriate store for each request.
 
-Both are implemented as agent tools, not standalone Python classes.
-The LLM **is** the router — it picks which tools to call.
+This module does **not** implement retention again. Module 3 already provides
+`RetentionScorer` and `CosmosRetentionStore`; retention remains a scheduled
+maintenance process. Here, lifecycle metadata controls which memories are
+eligible to enter an agent's context.
+
+Maps to: FR-008 (Retrieval), FR-009 (Routing), FR-013 (Bounded Context).
 
 ---
 
@@ -19,90 +22,76 @@ The LLM **is** the router — it picks which tools to call.
 
 ---
 
-## Already Built (Module 3)
+## Already Built
 
-| Capability | Where | Method |
-|---|---|---|
-| Retention scoring | `RetentionScorer` class | `score()`, `rank()`, `select_for_eviction()` |
-| Staleness sweep | `GraphPromotionStore.staleness_sweep()` | Deprecates stale preferences |
-| Deprecation sweep | `GraphPromotionStore.deprecation_sweep()` | Deletes deprecated preferences |
-| Gated recall | `GraphPromotionStore.gated_recall()` | Only returns trusted/provisional |
-| Belief snapshot | `GraphBeliefStore.snapshot()` | Lists all current beliefs |
+| Capability | Where | How Module 5 Uses It |
+|------------|-------|----------------------|
+| Vector retrieval | `SemanticMemoryStore.search()` | DiskANN candidate retrieval scoped by `/user_id` |
+| Access tracking | `SemanticMemoryStore.search(track_access=True)` | Updates frequency and recency signals after recall |
+| Trust gating | `CosmosPromotionStore.gated_recall()` | Excludes candidate and deprecated memories |
+| Belief revision | `CosmosBeliefStore` | Excludes superseded versions from current recall |
+| Retention scoring | `RetentionScorer`, `CosmosRetentionStore` | Scheduled scoring/deprecation keeps the serving set bounded |
+| Provenance and confidence | `CosmosProvenanceStore` | Controls assert, hedge, ask, or withhold behavior |
 
-**What's new**: wiring `RetentionScorer` to Neo4j graph + agent tools for eviction,
-and building a multi-store agent that routes queries to the right memory type.
+**What's new:** composing these signals into a retrieval policy and exposing
+all memory types as clearly described tools so the MAF agent can route requests.
 
 ---
 
-## Notebook 01: `01_retention_and_decay.ipynb`
+## Notebook 01: `01_retrieval_and_ranking.ipynb`
 
 ### Objective
 
-Wire the existing `RetentionScorer` to the Neo4j graph and give the agent tools
-to manage bounded memory — scoring beliefs, evicting low-value ones, and explaining
-why each belief was kept or dropped.
+Compare naive vector-only retrieval with lifecycle-aware retrieval. A high
+similarity score alone is insufficient: a result may be superseded, untrusted,
+deprecated, outside the user's partition, or too low-value to spend context on.
 
-### Builds On
+### Retrieval Pipeline
 
-- `RetentionScorer` (Module 3, lifecycle_utils.py) — scoring weights, eviction selection
-- `GraphBeliefStore` (Module 3.4) — `snapshot()`, `store()`, SCD Type 2
-- `GraphPromotionStore` (Module 3.3) — `staleness_sweep()`, `deprecation_sweep()`
+```mermaid
+flowchart LR
+    Q[User query] --> V[Cosmos DiskANN search]
+    V --> U[User and scope boundary]
+    U --> C[Current versions only]
+    C --> T[Trust-state gate]
+    T --> R[Rank by relevance and confidence]
+    R --> B[Bounded top-k context]
+    B --> A[MAF agent]
+```
 
-### New in `lifecycle_utils.py`
+The canonical implementation remains `SemanticMemoryStore.search()` with
+explicit options rather than a second storage abstraction:
 
 ```python
-# Add to GraphBeliefStore or new class:
-async def score_beliefs(self, scorer: RetentionScorer) -> list[dict]:
-    # Score all current beliefs using RetentionScorer weights.
-    # Returns: [{category, preference, score, breakdown: {recency, frequency, ...}}]
-
-async def evict(self, scorer: RetentionScorer, count: int = None) -> list[dict]:
-    # Evict lowest-scoring beliefs. Returns list of evicted beliefs with reasons.
-    # Marks beliefs as superseded with valid_to = now, reason = "retention_eviction"
+results = await semantic_store.search(
+    query,
+    top_k=5,
+    current_only=True,
+    states=["trusted", "provisional"],
+    track_access=True,
+)
 ```
 
-### Agent Tools
+### Demo Flow
 
-| Tool | Purpose |
-|------|---------|
-| `remember_belief` | Same as 3.4 — store preference |
-| `recall_current_beliefs` | Same as 3.4 — retrieve current beliefs |
-| `show_retention_scores` | Show all beliefs ranked by retention score with breakdown |
-| `run_memory_cleanup` | Evict N lowest-scoring beliefs, return what was dropped and why |
+1. Seed current, superseded, candidate, trusted, provisional, and deprecated
+   memories, including deliberately similar text.
+2. Run an unrestricted diagnostic search to show why vector similarity alone
+   returns unsafe or stale candidates.
+3. Run lifecycle-aware recall and verify only current trusted/provisional
+   records enter context.
+4. Show confidence-aware presentation: assert, hedge, ask, or withhold.
+5. Apply a strict `top_k` and compare context size without changing storage.
+6. Verify successful recall increments `access_count` and `last_accessed` for
+   future scheduled retention scoring.
 
-### Demo Flow (6 turns)
+### Key Insight: Retrieval Is Policy, Not Just Similarity
 
-1. **Populate** — Agent stores 15+ beliefs across categories (home_city, hotel, airline,
-   diet, seat, airport, budget_tier, meal_time, loyalty_program, rental_car, etc.)
-2. **Score** — User asks "How valuable is each of my preferences?"
-   → Agent calls `show_retention_scores` → ranked list with breakdown
-3. **Explain** — User asks "Why is my rental car preference scored so low?"
-   → "Stored 6 months ago, never accessed, no confirmations, low specificity"
-4. **Evict** — User says "Clean up my preferences, keep only the important ones"
-   → Agent calls `run_memory_cleanup(count=5)` → drops 5 lowest-scoring beliefs
-5. **Verify** — `recall_current_beliefs` shows reduced set; evicted ones are gone
-6. **Audit** — `belief_history` for an evicted category shows it was superseded with
-   reason "retention_eviction" — the eviction is recorded, not silently deleted
+Vector search answers "what looks related?" Lifecycle-aware retrieval also asks
+"is it current, trusted, authorized, useful, and worth the context budget?"
 
-### Scoring Formula (from existing RetentionScorer)
-
-```
-score = w_age × recency_decay
-      + w_freq × access_frequency
-      + w_success × success_correlation
-      + w_redundancy × (1 - redundancy_penalty)
-      + w_specificity × specificity_score
-```
-
-### 📄 Reference Papers
-
-**"Are We Ready For An Agent-Native Memory System?"** (arXiv:2606.24775)
-> Localized maintenance is more cost-efficient than global reorganization.
-> Our per-belief scoring aligns with this — evict individually, not batch-wipe.
-
-**"Less Context, More Accuracy"** (arXiv:2606.09900)
-> Lean retrieved context outperforms full history. Retention ensures the recall
-> set stays lean by proactively dropping low-value entries.
+This notebook bounds the number of returned memories. Token-aware packing and
+clustered memory compression are future optimizations, not claims of this module.
 
 ---
 
@@ -110,68 +99,81 @@ score = w_age × recency_decay
 
 ### Objective
 
-Build a single agent with access to all four memory types (chat history, episodic,
-semantic/graph, procedural/skills). The LLM routes queries to the right store by
-choosing which tools to call — no separate MemoryRouter class needed.
+Build one MAF agent with access to session, episodic, semantic, procedural, and
+policy knowledge. The LLM routes by selecting well-described tools; there is no
+separate classifier or `MemoryRouter` class.
 
-### Builds On
+### Memory Surfaces
 
-- `create_baseline_agent()` — factory with `extra_tools`, `context_providers`, `middleware`
-- Episodic memory (Module 2.2) — Cosmos DB event store
-- Semantic memory (Module 2.3) — Neo4j graph (preferences + beliefs)
-- Procedural memory (Module 2.4) — `SkillsProvider` for travel booking skills
-- Chat history (Module 2.1) — `AgentSession` + `CompactionProvider`
+| Surface | Tool or Provider | Example Question |
+|---------|------------------|------------------|
+| Session history | `AgentSession` | "What did I just ask?" |
+| Episodic memory | `recall_past_events` | "What happened on my last trip?" |
+| Semantic memory | `recall_current_beliefs` | "Which hotel chain do I prefer?" |
+| Procedural memory | `SkillsProvider` | "How should an international trip be booked?" |
+| Policy grounding | `search_travel_policies` | "What is my hotel limit?" |
+| Operational data | `search_flights`, `search_hotels` | "What can I book?" |
 
-### Agent Tools (multi-store)
+All persistent personal-memory tools are constructed with a fixed `user_id`;
+the model never supplies or changes the Cosmos partition key.
 
-| Tool | Store | Query Type |
-|------|-------|-----------|
-| `recall_current_beliefs` | Neo4j (semantic) | "What hotel do I prefer?" |
-| `recall_past_events` | Cosmos DB (episodic) | "What happened on my last trip?" |
-| `search_policies` | AI Search (procedural) | "What's the international booking process?" |
-| `search_flights`, `search_hotels` | Local data | Operational queries |
-| `remember_belief` | Neo4j (semantic) | Store new preferences |
+### Demo Flow
 
-Chat history is implicit via `AgentSession` + `CompactionProvider`.
-
-### Demo Flow (5 turns)
-
-1. **Semantic query** — "What hotel chain do I prefer?"
-   → Agent calls `recall_current_beliefs` → Neo4j
-2. **Episodic query** — "What happened on my trip to Chicago last month?"
-   → Agent calls `recall_past_events` → Cosmos DB
-3. **Procedural query** — "How do I book an international flight?"
-   → Agent picks up skills from `SkillsProvider` → AI Search
-4. **Compound query** — "Book me a hotel in Tokyo based on my usual preferences"
-   → Agent calls `recall_current_beliefs` (preferences) THEN `search_hotels` (availability)
-5. **Chat reference** — "What did I just ask about?"
-   → Answered from `AgentSession` chat history (no tool call needed)
+1. Ask a semantic preference question and verify only the semantic tool runs.
+2. Ask about a prior trip and verify episodic recall runs.
+3. Ask for a booking procedure and verify the relevant skill is loaded.
+4. Ask a policy question and verify Azure AI Search supplies grounded content.
+5. Ask a compound booking question that requires semantic preferences, policy,
+   and operational availability.
+6. Ask a current-conversation question answered by `AgentSession` without a
+   persistent-memory tool call.
+7. Repeat a query under a second `user_id` and verify no cross-partition result
+   reaches the agent.
 
 ### Key Insight: The LLM Is the Router
 
-There is no `MemoryRouter` class with `if classification == "factual"` logic.
-The agent's system prompt describes each tool's purpose, and the LLM's tool-calling
-capability naturally routes queries to the right store. This is the simplest correct
-implementation — adding a classifier in front of the LLM is redundant.
+Tool schemas describe what each memory surface knows. MAF tool selection handles
+single-store and compound queries without duplicating the model with a brittle
+front-door classifier.
 
-### 📄 Reference Paper
+---
+
+## Validation Criteria
+
+| Check | Expected Result |
+|-------|-----------------|
+| Superseded memory | Never appears in current recall |
+| Candidate/deprecated memory | Never enters agent context |
+| Provisional memory | Returned with hedge/confirmation behavior |
+| Context bound | No more than configured `top_k` memories |
+| Access tracking | Recalled records increment access metadata |
+| Store routing | Each query invokes the expected memory tool(s) |
+| Compound routing | Agent combines stores without treating policy as preference |
+| User isolation | A second `/user_id` partition returns no first-user memories |
+
+---
+
+## Reference Papers
 
 **"Are We Ready For An Agent-Native Memory System?"** (arXiv:2606.24775)
-> No single memory architecture dominates across all scenarios — effectiveness
-> depends on how well memory structure aligns with workload. Our multi-tool
-> approach lets the LLM match query type to the right store naturally.
+> Memory structure should align with workload. Specialized tools let the agent
+> select the appropriate memory surface for each request.
+
+**"Less Context, More Accuracy"** (arXiv:2606.09900)
+> Lean retrieved context can outperform full history. Lifecycle gates and a
+> bounded result set prevent stale or low-value memories from filling context.
 
 ---
 
 ## Prerequisites
 
-- Module 2 (all four memory stores operational)
-- Module 3 (lifecycle management — retention scoring, belief store)
-- Module 4 (confidence-aware recall for ranking)
-- Cosmos DB, Neo4j, AI Search provisioned
+- Module 2 memory layers: session, episodic, semantic, and procedural
+- Module 3 Cosmos lifecycle stores and retention scoring
+- Module 4 provenance and confidence-aware recall
+- Cosmos DB, Azure AI Search, Azure AI Foundry, and MAF configuration
 
 ## Outputs for Later Modules
 
-- Multi-store agent → foundation for Module 09 (multi-agent handoff)
-- Retention eviction → used by Module 08 (evaluation — measure what's lost)
-- Routing patterns → used by Module 10 (unified agent)
+- Lifecycle-aware retrieval tools → Module 6 governance and Module 8 evaluation
+- Multi-store routing pattern → Module 9 handoff and Module 10 unified agent
+- Retrieval traces → Module 8 routing and stale-memory metrics

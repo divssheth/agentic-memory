@@ -2,29 +2,28 @@
 
 ## Module Narrative
 
-> "Multiple agents, one user's memory — scoped sharing, not full exposure."
+> "Share the minimum authorized memory, preserve user isolation, and propagate erasure."
 
-When a travel agent hands off to an expense agent, the expense agent needs trip
-details but NOT dietary preferences. When two agents serve two users on the same
-Neo4j graph, User A's data must never leak to User B. This module demonstrates
-scoped memory handoff between MAF agents and cross-user isolation on shared storage.
+Multiple agents may serve one user from shared Cosmos containers, but they do
+not receive identical views. This module separates the user partition boundary
+from the role/category boundary and tests both during handoff and erasure.
 
-Maps to: FR-015 (Least Privilege), FR-016 (Cross-User Isolation).
+Maps to: FR-015 (Least Privilege), FR-016 (Cross-User Isolation),
+FR-024 (Verified Forgetting).
 
 ---
 
 ## Status: 🔨 TO IMPLEMENT
 
----
+## Already Built
 
-## Already Built (Modules 3–6)
-
-| Capability | Where | Enables |
-|---|---|---|
-| Category-based storage | `GraphBeliefStore.store(category, ...)` | Scoped transfer by category |
-| Memory scoping middleware | `MemoryScopeMiddleware` (Module 6) | Per-agent category whitelists |
-| User-partitioned queries | Neo4j `MemoryClient` via `user_id` | Cross-user isolation |
-| Agent factory | `create_baseline_agent()` | Constructing multiple agents with different configs |
+| Capability | Source |
+|------------|--------|
+| User-bound Cosmos stores | `SemanticMemoryStore(user_id=...)` |
+| Category-scoped tools/middleware | Module 6 |
+| Multi-store routing | Module 5 |
+| Secured retirement and erasure | Modules 6–7 |
+| Canary evaluation | Module 8 |
 
 ---
 
@@ -32,63 +31,40 @@ Maps to: FR-015 (Least Privilege), FR-016 (Cross-User Isolation).
 
 ### Objective
 
-Demonstrate scoped memory transfer when one MAF agent hands control to another.
-The receiving agent gets only the memories relevant to its role.
+Handoff work between travel and expense agents without copying a user's entire
+profile into prompts or a new uncontrolled store.
 
-### Builds On
+### Boundaries
 
-- `create_baseline_agent()` — creates agents with different tools and middleware
-- `MemoryScopeMiddleware` (Module 6) — filters recall by category whitelist
-- `GraphBeliefStore` — shared Neo4j graph
+| Boundary | Enforcement |
+|----------|-------------|
+| User isolation | Cosmos `/user_id` partition key bound during store construction |
+| Agent role | Only allowed category tools are exposed to each agent |
+| Handoff payload | Opaque references plus minimum task data |
+| Durable projection | Registered with `ErasureCoordinator` if it can later serve personal data |
 
-### Two Agents
+| Agent | Allowed Memory |
+|-------|----------------|
+| TravelAgent | home city, airport, airline, hotel, seat, diet, loyalty |
+| ExpenseAgent | trip identifier, route, cost, expense status, applicable policy |
 
-| Agent | Role | Allowed Categories |
-|-------|------|-------------------|
-| TravelAgent | Book flights, hotels | home_city, airline, hotel, airport, seat, diet, loyalty |
-| ExpenseAgent | Process expense reports | home_city, airline, airport, budget_tier, expense_policy |
+### Demo Flow
 
-Both agents read/write to the **same** Neo4j graph. The `MemoryScopeMiddleware`
-ensures each agent only sees its allowed categories.
+1. TravelAgent stores preferences and completes a booking.
+2. It creates a scoped handoff containing a trip reference and minimum expense data.
+3. ExpenseAgent resolves only fields permitted by its tools and user partition.
+4. Attempts to retrieve diet, seat, or unrelated hotel preferences are denied
+   before a Cosmos query is issued.
+5. ExpenseAgent records expense status through its allowed category tool.
+6. Verify bidirectional visibility only for explicitly shared categories.
+7. Erase one handed-off personal field, start fresh sessions for both agents,
+   and verify neither agent nor the durable handoff projection can retrieve it.
 
-### Demo Flow (8 turns across 2 agents)
+### Key Insight: Shared Storage Does Not Mean Shared Authority
 
-**Phase 1: Travel Agent (4 turns)**
-1. User: "I live in Denver, I always fly United, Marriott for hotels"
-   → TravelAgent stores: home_city, airline, hotel
-2. User: "Book me a flight to NYC next week"
-   → TravelAgent uses preferences for booking
-3. User: "I'm vegetarian and prefer aisle seats"
-   → TravelAgent stores: diet, seat
-4. User: "Booking confirmed: United DEN→JFK, Marriott Times Square, $1,200 total"
-   → TravelAgent stores trip details
-
-**Phase 2: Handoff (1 cell)**
-- Print what ExpenseAgent CAN see (home_city, airline, airport)
-- Print what ExpenseAgent CANNOT see (diet, seat, hotel, loyalty)
-
-**Phase 3: Expense Agent (3 turns)**
-5. User: "Process the expense for my NYC trip"
-   → ExpenseAgent recalls trip details via scoped memory — sees airline and city, not hotel or diet
-6. ExpenseAgent: "I see you flew United DEN→JFK. What was the total cost?"
-   → (cannot see hotel details — would need to ask)
-7. User confirms cost → ExpenseAgent stores `expense_status: approved`
-   → This write is visible to TravelAgent on next invocation
-
-**Phase 4: Verify bidirectional flow (1 cell)**
-8. TravelAgent recalls preferences → sees `expense_status: approved` from ExpenseAgent
-
-### Key Insight: Shared Graph, Scoped Views
-
-There is no "handoff protocol" class. Both agents point at the same Neo4j graph.
-Scoping is enforced by `MemoryScopeMiddleware` — the middleware filters tool
-results, not the graph itself. Simple and correct.
-
-### 📄 Reference Paper
-
-**"No Attacker Needed: Unintentional Cross-User Contamination"** (arXiv:2604.01350)
-> Cross-user contamination can happen without malicious intent through shared state.
-> Our middleware-based scoping prevents this structurally.
+Both agents may use the same containers, but each receives a user-bound store
+and a role-specific tool surface. Middleware is defense in depth; it is not a
+substitute for partition and pre-query scope enforcement.
 
 ---
 
@@ -96,59 +72,51 @@ results, not the graph itself. Simple and correct.
 
 ### Objective
 
-Verify cross-user isolation: two agents serve two different users on the same
-Neo4j graph. User A's preferences must NEVER appear in User B's responses.
+Prove structural isolation for two users in shared Cosmos containers, including
+ordinary retrieval, handoff, retirement, and erasure.
 
-### Builds On
+### Setup
 
-- Neo4j `MemoryClient` — user_id partitioning
-- `GraphBeliefStore` — same class, different user context
-- `create_baseline_agent()` — agent factory
+| User | Example Profile | Partition |
+|------|-----------------|-----------|
+| Sarah | Denver, United, Marriott | `user_id=sarah` |
+| James | Boston, JetBlue, Hilton | `user_id=james` |
 
-### Two Users, One Graph
+The model never receives a tool parameter that selects another user's partition.
 
-| Setup | Details |
-|-------|---------|
-| User A (Sarah) | home_city: Denver, airline: United, hotel: Marriott |
-| User B (James) | home_city: Boston, airline: JetBlue, hotel: Hilton |
-| Storage | Same Neo4j instance, same database |
-| Isolation | `user_id` parameter on all MemoryClient operations |
+### Demo Flow
 
-### Demo Flow (6 turns)
+1. Populate both users with overlapping categories and distinct canaries.
+2. Verify each user retrieves only their own records.
+3. Ask one agent about the other user and verify an empty/denied result without
+   existence disclosure.
+4. Attempt to retire and erase the other user's record.
+5. Erase Sarah's canary legitimately and recreate all agent sessions.
+6. Verify Sarah's canary is absent from every registered projection while
+   James's record remains retrievable.
+7. Query Cosmos directly with each partition key for programmatic assertions.
 
-1. **Populate Sarah** — Store 3 preferences for user_id="sarah"
-2. **Populate James** — Store 3 preferences for user_id="james"
-3. **Isolation test A** — Sarah's agent recalls preferences → sees only Sarah's data
-4. **Isolation test B** — James's agent recalls preferences → sees only James's data
-5. **Cross-query** — Sarah's agent asked "What does James prefer?" → no results
-   (even if the agent tries, the graph query is partitioned by user_id)
-6. **Neo4j verification** — Direct Cypher query showing both users' data exists
-   but is partitioned by user_id on the Preference nodes
+### Validation Criteria
 
-### Key Insight: Partition at the Data Layer
-
-Isolation is enforced by `MemoryClient`'s `user_id` parameter on every query,
-not by prompt instructions. The LLM cannot bypass this even if instructed to —
-the Cypher query physically filters by user_id.
-
-### 📄 Reference Papers
-
-**"GateMem"** (arXiv:2606.18829)
-> Joint evaluation of utility, access control, and active forgetting in multi-principal
-> settings. Our partition-at-data-layer approach ensures structural isolation.
-
-**"AgentSafe"** (arXiv:2503.04392)
-> Hierarchical data management for multi-agent safety. Our user_id partitioning
-> is the data-layer foundation that makes higher-level scoping possible.
+| Check | Expected Result |
+|-------|-----------------|
+| Cross-user recall | 0 records |
+| Cross-user mutation | 0 records changed |
+| Role/category leakage | 0 records enter context |
+| Authorized handoff | Only minimum permitted data |
+| Erasure propagation | All registered recipient projections verified absent |
+| Neighbor integrity | Other user and categories unchanged |
 
 ---
 
 ## Prerequisites
 
-- Module 6 (MemoryScopeMiddleware, access control patterns)
-- Module 3 (GraphBeliefStore, GraphPromotionStore — shared graph backend)
+- Module 5 routing
+- Module 6 scoped governance and erasure adapters
+- Module 7 authorization defenses
+- Module 8 canary evaluation
 
 ## Outputs for Later Modules
 
-- Scoped handoff pattern → used in Module 10 (unified agent with role-based views)
-- Cross-user isolation → validated assumption for production deployment
+- Scoped handoff composition → Module 10 unified agent
+- Multi-user erasure and isolation assertions → capstone integration test
