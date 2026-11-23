@@ -103,6 +103,7 @@ agentic-memory/
 │   └── 01_unified_memory_agent.ipynb
 ├── data/                          # Employees, flights, hotels, policies
 ├── shared/                        # Reusable utilities
+│   ├── memory_tools.py            # Per-user memory tools + assert/hedge/ask rule
 │   ├── semantic_store.py          # SemanticMemoryStore (Cosmos DB + vector search)
 │   └── travel_agent.py            # Client factory, tools, system prompt
 ├── requirements.txt
@@ -117,16 +118,19 @@ classes live in [03_memory_lifecycle/lifecycle_utils.py](03_memory_lifecycle/lif
 Module 4 adds `CosmosProvenanceStore` in its own
 [04_provenance_and_audit/lifecycle_utils.py](04_provenance_and_audit/lifecycle_utils.py).
 
+Agent memory tools are built per user with `make_preference_tools(store)`
+([shared/memory_tools.py](shared/memory_tools.py)): the store is bound to one `user_id`,
+so the model never chooses whose memories it reads or writes.
+
 | Class | Module | Purpose |
 |-------|--------|---------|
 | `SemanticMemoryStore` | 2.3 | Cosmos DB preference documents with vector search and SCD Type 2 supersession |
-| `PromotionEngine` | 3.3 | Configurable promotion criteria evaluation |
+| `MemoryCandidate` | 3.2 | Memorability scores and decision for one conversation turn |
+| `PromotionConfig` | 3.3 | Confirmation thresholds and staleness window |
 | `CosmosPromotionStore` | 3.3 | Trust state machine: candidate → provisional → trusted |
 | `CosmosBeliefStore` | 3.4 | SCD Type 2 belief revision with time-travel queries |
 | `RetentionScorer` | 3.5 | Multi-signal scoring for bounded memory eviction |
 | `CosmosRetentionStore` | 3.5 | Cosmos-backed capacity-bounded memory store |
-| `EpisodicTTLConfig` | 3.6 | TTL configuration for episodic event expiry |
-| `ProceduralReflection` | 3.6 | Data model for agent-learned procedural lessons |
 | `CosmosProvenanceStore` | 4.1 | Evidence metadata, `explain()` and confidence-aware recall |
 
 ## Environment Variables

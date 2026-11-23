@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shared.memory_tools import presentation
+
 
 class CosmosProvenanceStore:
     """Enrich and recall lifecycle beliefs with traceable provenance.
@@ -70,7 +72,7 @@ class CosmosProvenanceStore:
         rows = await self._s.search(
             query, states=["trusted", "provisional"])
         for row in rows:
-            row["presentation"] = self._presentation(
+            row["presentation"] = presentation(
                 row["state"], row.get("confidence") or 0.0)
         return rows
 
@@ -93,7 +95,7 @@ class CosmosProvenanceStore:
             "confirmation_count": current.get("confirmation_count"),
             "history": history,
         }
-        result["presentation"] = self._presentation(
+        result["presentation"] = presentation(
             result["state"] or "candidate",
             result.get("confidence") or 0.0,
         )
@@ -102,13 +104,3 @@ class CosmosProvenanceStore:
     async def snapshot(self) -> list[dict]:
         """Return this user's existing lifecycle records for inspection."""
         return await self._s.snapshot(include_deprecated=True)
-
-    @staticmethod
-    def _presentation(state: str, confidence: float) -> str:
-        if state == "provisional":
-            return "ask" if confidence < 0.5 else "hedge"
-        if state == "trusted":
-            if confidence >= 0.8:
-                return "assert"
-            return "hedge" if confidence >= 0.5 else "ask"
-        return "withhold"

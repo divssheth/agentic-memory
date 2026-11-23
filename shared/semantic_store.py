@@ -252,25 +252,24 @@ class SemanticMemoryStore:
 
     # ----- lifecycle updates (used by Modules 3-4) -----
 
-    async def confirm(self, preference_text: str) -> dict | None:
-        """Increment confirmation_count and advance state."""
+    async def confirm(self, preference_text: str, *,
+                      provisional_threshold: int = 1,
+                      trusted_threshold: int = 2) -> dict | None:
+        """Increment confirmation_count and advance state.
+        A confirmed user assertion goes straight to trusted."""
         matches = await self.search(preference_text, top_k=1,
                                     current_only=True)
         if not matches:
             return None
         doc = matches[0]
         new_count = (doc.get("confirmation_count") or 0) + 1
-        src = doc.get("source_type", "")
-        old_state = doc.get("state", "candidate")
 
-        if src == "user_assertion" and new_count >= 1:
+        if doc.get("source_type") == "user_assertion" or new_count >= trusted_threshold:
             new_state = "trusted"
-        elif new_count >= 2:
-            new_state = "trusted"
-        elif new_count >= 1:
+        elif new_count >= provisional_threshold:
             new_state = "provisional"
         else:
-            new_state = old_state
+            new_state = doc.get("state", "candidate")
 
         await self._c.patch_item(
             item=doc["id"],
