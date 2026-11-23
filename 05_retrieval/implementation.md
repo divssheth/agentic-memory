@@ -18,7 +18,7 @@ Maps to: FR-008 (Retrieval), FR-009 (Routing), FR-013 (Bounded Context).
 
 ---
 
-## Status: 🔨 TO IMPLEMENT
+## Status: 🔨 IN PROGRESS — Notebook 01 built; Notebook 02 to implement
 
 ---
 
@@ -59,18 +59,22 @@ flowchart LR
     B --> A[MAF agent]
 ```
 
-The canonical implementation remains `SemanticMemoryStore.search()` with
-explicit options rather than a second storage abstraction:
+The pipeline is packaged in `shared/memory_tools.py` as `retrieve(store, query, top_k=5)`,
+which wraps one `SemanticMemoryStore.search()` call:
 
 ```python
-results = await semantic_store.search(
+rows = await semantic_store.search(
     query,
-    top_k=5,
+    top_k=pool,
     current_only=True,
     states=["trusted", "provisional"],
-    track_access=True,
+    track_access=False,
 )
+# rank = 0.7 * pool-normalised similarity + 0.3 * confidence; keep top_k;
+# then store.mark_accessed() on the returned ids only
 ```
+
+`make_retrieval_tool(store)` exposes it to the agent as `recall_current_beliefs`.
 
 ### Demo Flow
 

@@ -176,20 +176,23 @@ class SemanticMemoryStore:
             sql, parameters=params, partition_key=self._user_id,
         )]
 
-        if track_access and results:
-            now = datetime.now(timezone.utc).isoformat()
-            for item in results:
-                if "id" in item:
-                    await self._c.patch_item(
-                        item=item["id"],
-                        partition_key=self._user_id,
-                        patch_operations=[
-                            {"op": "incr", "path": "/access_count", "value": 1},
-                            {"op": "set", "path": "/last_accessed", "value": now},
-                        ],
-                    )
+        if track_access:
+            await self.mark_accessed([item["id"] for item in results])
 
         return results
+
+    async def mark_accessed(self, doc_ids: list[str]) -> None:
+        """Increment access_count and set last_accessed (retention signals)."""
+        now = datetime.now(timezone.utc).isoformat()
+        for doc_id in doc_ids:
+            await self._c.patch_item(
+                item=doc_id,
+                partition_key=self._user_id,
+                patch_operations=[
+                    {"op": "incr", "path": "/access_count", "value": 1},
+                    {"op": "set", "path": "/last_accessed", "value": now},
+                ],
+            )
 
     async def get_current(self, category: str) -> dict | None:
         """Return the current (non-superseded) preference in a category."""
@@ -366,6 +369,9 @@ class SemanticMemoryStore:
             {"name": "@uid", "value": self._user_id},
             {"name": "@cat", "value": category},
         ]
+        if self.scope_tag:
+            sql += " AND c.scope_tag = @scope"
+            params.append({"name": "@scope", "value": self.scope_tag})
         items = [item async for item in self._c.query_items(
             sql, parameters=params, partition_key=self._user_id,
         )]

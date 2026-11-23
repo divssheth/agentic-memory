@@ -46,3 +46,47 @@ def make_preference_tools(store) -> list:
         return f"Stored [{category}]: {preference}"
 
     return [recall_preferences, store_preference]
+
+
+TRUST_STATES = ["trusted", "provisional"]
+
+
+async def retrieve(store, query: str, *, top_k: int = 5, pool: int = 20,
+                   confidence_weight: float = 0.3) -> list[dict]:
+    """Lifecycle-aware recall: current, trusted/provisional memories ranked by
+    relevance and confidence, bounded to ``top_k``. Only returned memories
+    are marked as accessed."""
+    rows = await store.search(query, top_k=pool, current_only=True,
+                              states=TRUST_STATES, track_access=False)
+    if not rows:
+        return []
+    # Embedding similarities cluster in a narrow band; rescale to [0, 1] so
+    # confidence breaks ties instead of overriding relevance.
+    lo, hi = min(r["score"] for r in rows), max(r["score"] for r in rows)
+    for r in rows:
+        relevance = (r["score"] - lo) / (hi - lo) if hi > lo else 1.0
+        r["rank"] = ((1 - confidence_weight) * relevance
+                     + confidence_weight * (r.get("confidence") or 0.0))
+        r["presentation"] = presentation(r["state"], r.get("confidence") or 0.0)
+    ranked = sorted(rows, key=lambda r: r["rank"], reverse=True)[:top_k]
+    await store.mark_accessed([r["id"] for r in ranked])
+    return ranked
+
+
+def make_retrieval_tool(store, top_k: int = 5):
+    """Return a lifecycle-aware ``recall_current_beliefs`` tool bound to ``store``'s user."""
+
+    @tool
+    async def recall_current_beliefs(query: str) -> str:
+        """Recall the current user's current, trusted or provisional preferences
+        relevant to the query, each with how to present it: assert, hedge or ask."""
+        rows = await retrieve(store, query, top_k=top_k)
+        if not rows:
+            return "No current beliefs are eligible for recall."
+        return "\n".join(
+            f"[{r['category']}] {r['preference']} -> {r['presentation']} "
+            f"(state: {r['state']}, confidence: {r.get('confidence') or 0:.2f})"
+            for r in rows
+        )
+
+    return recall_current_beliefs
