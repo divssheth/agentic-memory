@@ -18,7 +18,7 @@ Maps to: FR-008 (Retrieval), FR-009 (Routing), FR-013 (Bounded Context).
 
 ---
 
-## Status: 🔨 IN PROGRESS — Notebook 01 built; Notebook 02 to implement
+## Status: ✅ COMPLETE
 
 ---
 
@@ -112,10 +112,10 @@ separate classifier or `MemoryRouter` class.
 | Surface | Tool or Provider | Example Question |
 |---------|------------------|------------------|
 | Session history | `AgentSession` | "What did I just ask?" |
-| Episodic memory | `recall_past_events` | "What happened on my last trip?" |
-| Semantic memory | `recall_current_beliefs` | "Which hotel chain do I prefer?" |
+| Episodic memory | `recall_past_events` (`make_episodic_tool`) | "What happened on my last trip?" |
+| Semantic memory | `recall_current_beliefs` (`make_retrieval_tool`) | "Which hotel chain do I prefer?" |
 | Procedural memory | `SkillsProvider` | "How should an international trip be booked?" |
-| Policy grounding | `search_travel_policies` | "What is my hotel limit?" |
+| Policy grounding | `search_travel_policies` (`make_policy_tool`) | "What is my hotel limit?" |
 | Operational data | `search_flights`, `search_hotels` | "What can I book?" |
 
 All persistent personal-memory tools are constructed with a fixed `user_id`;

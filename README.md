@@ -12,7 +12,7 @@ Every notebook follows a **problem-first** structure: demonstrate a failure → 
 | **02 Memory Layers** | `02_memory_layers/` | 4 | ✅ Complete | Chat history (Cosmos), episodic (Cosmos), semantic (Cosmos vector search), procedural (SkillsProvider) |
 | **03 Memory Lifecycle** | `03_memory_lifecycle/` | 7 | ✅ Complete | Memory vs RAG, identification, staged promotion, belief revision (SCD Type 2), retention, episodic + procedural lifecycle |
 | **04 Provenance & Confidence** | `04_provenance_and_audit/` | 1 | ✅ Complete | `explain_belief` tool + confidence-aware recall (assert / hedge / ask) |
-| **05 Retrieval & Routing** | `05_retrieval/` | 2 | � In progress (1/2) | Lifecycle-aware bounded retrieval (`retrieve`, `make_retrieval_tool`); multi-store agent (LLM-as-router) |
+| **05 Retrieval & Routing** | 05_retrieval/ | 2 | ✅ Complete | Lifecycle-aware bounded retrieval (retrieve, make_retrieval_tool); multi-store agent (LLM-as-router) |
 | **06 Governance & User Control** | `06_governance/` | 2 | 📋 Planned | Inspect/correct/retire/erase tools with verified erasure; role-based memory scoping |
 | **07 Security** | `07_security/` | 2 | 📋 Planned | Memory poisoning and unauthorized erasure attacks; defense-in-depth (origin ceiling + independent corroboration) |
 | **08 Evaluation** | `08_evaluation/` | 2 | 📋 Planned | MEMPROBE-style quality probing; canary erasure test; sycophancy + adversarial robustness testing |
